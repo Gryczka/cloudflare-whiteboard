@@ -1,0 +1,47 @@
+.github/ISSUE_TEMPLATE/bug_report.md
+  s_a747244044c593::t_e45242c06feb73 1-19
+.github/ISSUE_TEMPLATE/feature_request.md
+  s_a747244044c593::t_f27316fbb82f49 1-12
+AGENTS.md
+  s_a747244044c593::t_88a2f94b215c08 1-38
+SECURITY.md
+  s_a747244044c593::t_4bfd07a9cdb322 1-16
+docs/threat-model.md
+  s_a747244044c593::t_f43530a69e2fd3 1-36
+index.html
+  s_a747244044c593::t_269e553fdb5562 1-15
+package-lock.json
+  s_a747244044c593::t_9ce4ade5019193 1-5298
+package.json
+  s_a747244044c593::t_379b9a79324ad0 1-53
+test/env.d.ts
+  s_a747244044c593::t_23e8237a5e7f47 1-3
+test/tsconfig.json
+  s_a747244044c593::t_daf0c3d71e8c54 1-8
+tsconfig.json
+  s_a747244044c593::t_d8bc76735102ae 1-19
+vite.config.ts
+  s_a747244044c593::t_1d62fc8df63faa 1-5
+vitest.config.ts
+  s_a747244044c593::t_88b93621b90e48 1-6
+worker-configuration.d.ts
+  s_a747244044c593::t_3032e29e8a7749 1-14717
+wrangler.jsonc
+  s_a747244044c593::t_6dae5b43172502 1-58
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "61a9aed0d1dd9765b73b18c9d708e9471bdc2fcf",
+  "prompts": {},
+  "sessions": {
+    "s_a747244044c593": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_0702bb7a3ffeXMwIiyEBAqK6tm",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "gryczka <pgryczka@cloudflare.com>"
+    }
+  }
+}
