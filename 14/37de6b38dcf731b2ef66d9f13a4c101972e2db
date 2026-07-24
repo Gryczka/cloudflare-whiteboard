@@ -1,0 +1,21 @@
+src/client/styles/app.css
+  s_d480d0d4917b4a::t_8ba0bb53cad925 956-958
+test/board.spec.ts
+  s_d480d0d4917b4a::t_2ca0150a58a5fa 47-61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "1437de6b38dcf731b2ef66d9f13a4c101972e2db",
+  "prompts": {},
+  "sessions": {
+    "s_d480d0d4917b4a": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_07051eeacffemX7j3UI26MoA9T",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "gryczka <pgryczka@cloudflare.com>"
+    }
+  }
+}
