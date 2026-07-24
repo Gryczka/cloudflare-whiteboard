@@ -389,7 +389,6 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 			setDrafts(new Map([[textBox.id, textBox]]));
 			setEditingId(textBox.id);
 		}
-		if (gesture.kind === 'draw' && !event.shiftKey) setTool('select');
 	}
 
 	function beginTextEditing(element: BoardElement) {
@@ -397,7 +396,6 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 		setSelection([element.id]);
 		setDrafts((current) => new Map(current).set(element.id, element));
 		setEditingId(element.id);
-		setTool('select');
 	}
 
 	function beginConnection(event: React.PointerEvent<SVGElement>, source: BoardElement) {
@@ -570,6 +568,7 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 								key={id}
 								className={tool === id ? 'active' : ''}
 								onClick={() => setTool(id)}
+								aria-pressed={tool === id}
 								aria-label={`${label}${key ? ` (${key})` : ''}`}
 								title={`${label}${key ? ` (${key})` : ''}`}
 							>
