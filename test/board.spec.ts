@@ -2,6 +2,7 @@ import { env, exports } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import { applyOperation, boardElementSchema, DEFAULT_STYLE, type BoardElement } from '../src/shared/board';
 import { hashToken, randomToken, safeEqual } from '../src/shared/crypto';
+import { centerPlacement, createObjectAt, DEFAULT_SIZES } from '../src/client/editor/shape-defaults';
 import { textBoxHeight, wrapTextLines } from '../src/client/editor/text-layout';
 
 const rectangle: BoardElement = {
@@ -68,6 +69,35 @@ describe('board state', () => {
 				style: { ...rectangle.style, startArrow: 'dot', endArrow: 'diamond' },
 			}).success,
 		).toBe(true);
+	});
+
+	it('places palette objects centered on the drop point at a consistent size', () => {
+		const placed = createObjectAt('rectangle', { x: 400, y: 300 }, DEFAULT_STYLE);
+		expect(placed.width).toBe(DEFAULT_SIZES.rectangle.width);
+		expect(placed.height).toBe(DEFAULT_SIZES.rectangle.height);
+		expect(placed.x + placed.width / 2).toBe(400);
+		expect(placed.y + placed.height / 2).toBe(300);
+		expect(boardElementSchema.safeParse(placed).success).toBe(true);
+	});
+
+	it('gives sticky notes their own fill without altering other objects', () => {
+		expect(createObjectAt('sticky', { x: 0, y: 0 }, DEFAULT_STYLE).style.fill).toBe('#FFF3AE');
+		expect(createObjectAt('ellipse', { x: 0, y: 0 }, DEFAULT_STYLE).style.fill).toBe(DEFAULT_STYLE.fill);
+	});
+
+	it('centers placement in the viewport and cascades away from occupied space', () => {
+		const viewport = { x: 0, y: 0, zoom: 1 };
+		const canvas = { width: 800, height: 600 };
+		const first = centerPlacement(viewport, canvas, []);
+		expect(first).toEqual({ x: 400, y: 300 });
+
+		const occupied = createObjectAt('rectangle', first, DEFAULT_STYLE);
+		const second = centerPlacement(viewport, canvas, [occupied]);
+		expect(second).not.toEqual(first);
+	});
+
+	it('accounts for pan and zoom when centering placement', () => {
+		expect(centerPlacement({ x: -200, y: -100, zoom: 2 }, { width: 800, height: 600 }, [])).toEqual({ x: 300, y: 200 });
 	});
 
 	it('accepts connectors bound to source and target shapes', () => {

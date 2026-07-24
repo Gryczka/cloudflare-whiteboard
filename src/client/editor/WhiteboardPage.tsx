@@ -4,26 +4,15 @@ import {
 	AlignCenterVertical,
 	ArrowDown,
 	ArrowUp,
-	Circle,
+	Code2,
 	Copy,
-	Diamond,
 	Download,
-	Eraser,
-	Frame,
 	Group,
-	Hand,
-	Highlighter,
 	Lock,
 	Menu,
-	Minus,
-	MousePointer2,
-	Pencil,
 	Redo2,
-	RectangleHorizontal,
 	Share2,
-	StickyNote,
 	Trash2,
-	Type,
 	Undo2,
 	Ungroup,
 	Unlock,
@@ -44,26 +33,18 @@ import {
 	type ElementType,
 	type Point,
 } from '../../shared/board';
+import { REPO_URL } from '../../shared/constants';
 import type { Presence } from '../../shared/protocol';
 import { Logo } from '../components/Logo';
 import { useBoard } from '../realtime/useBoard';
 import { ElementRenderer } from './ElementRenderer';
+import { MODE_TOOLS, OBJECT_TILES, type ModeTool } from './palette-items';
+import { centerPlacement, createObjectAt, type ObjectKind } from './shape-defaults';
+import { ShapePalette } from './ShapePalette';
 import { textBoxHeight } from './text-layout';
 
-type Tool =
-	| 'select'
-	| 'hand'
-	| 'pencil'
-	| 'highlighter'
-	| 'rectangle'
-	| 'ellipse'
-	| 'diamond'
-	| 'line'
-	| 'arrow'
-	| 'text'
-	| 'sticky'
-	| 'frame'
-	| 'eraser';
+/** Tools that draw by dragging on the canvas; every other object is placed from the palette. */
+type DrawTool = 'pencil' | 'highlighter' | 'line' | 'arrow';
 const CLOSED_SHAPES: BoardElement['type'][] = ['rectangle', 'ellipse', 'diamond', 'sticky', 'frame'];
 interface Viewport {
 	x: number;
@@ -75,26 +56,14 @@ interface HistoryEntry {
 	inverse: BoardOperation;
 }
 
-const TOOLS: Array<{ id: Tool; label: string; icon: typeof MousePointer2; key?: string }> = [
-	{ id: 'select', label: 'Select', icon: MousePointer2, key: 'V' },
-	{ id: 'hand', label: 'Pan', icon: Hand, key: 'H' },
-	{ id: 'pencil', label: 'Draw', icon: Pencil, key: 'P' },
-	{ id: 'highlighter', label: 'Highlighter', icon: Highlighter },
-	{ id: 'rectangle', label: 'Text box', icon: RectangleHorizontal, key: 'R' },
-	{ id: 'ellipse', label: 'Ellipse', icon: Circle, key: 'O' },
-	{ id: 'diamond', label: 'Diamond', icon: Diamond, key: 'D' },
-	{ id: 'line', label: 'Line', icon: Minus, key: 'L' },
-	{ id: 'arrow', label: 'Arrow', icon: ArrowUp, key: 'A' },
-	{ id: 'text', label: 'Text', icon: Type, key: 'T' },
-	{ id: 'sticky', label: 'Sticky note', icon: StickyNote, key: 'S' },
-	{ id: 'frame', label: 'Frame', icon: Frame, key: 'F' },
-	{ id: 'eraser', label: 'Eraser', icon: Eraser, key: 'E' },
-];
+function isDrawTool(tool: ModeTool): tool is DrawTool {
+	return tool === 'pencil' || tool === 'highlighter' || tool === 'line' || tool === 'arrow';
+}
 
 /** Renders an editable or view-only board according to the supplied capability. */
 export function WhiteboardPage({ boardId, token }: { boardId: string; token: string }) {
 	const board = useBoard(boardId, token);
-	const [tool, setTool] = useState<Tool>('rectangle');
+	const [tool, setTool] = useState<ModeTool>('select');
 	const [selection, setSelection] = useState<string[]>([]);
 	const [marquee, setMarquee] = useState<{ start: Point; current: Point } | null>(null);
 	const [editingId, setEditingId] = useState<string | null>(null);
@@ -113,6 +82,7 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 	const clipboardRef = useRef<BoardElement[]>([]);
 	const pointerRef = useRef<
 		| { kind: 'draw'; start: Point; element: BoardElement }
+		| { kind: 'insert'; objectKind: ObjectKind; element: BoardElement | null; overCanvas: boolean }
 		| { kind: 'connect'; source: BoardElement; element: BoardElement }
 		| { kind: 'marquee'; start: Point; current: Point; additive: boolean }
 		| { kind: 'move'; start: Point; originals: BoardElement[]; current: BoardElement[] }
@@ -219,6 +189,29 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 		setSelection(next);
 	}, [commit, selected]);
 
+	/** Commits a placed object, selects it, and opens its text editor. */
+	const insertObject = useCallback(
+		(element: BoardElement) => {
+			commit({ action: 'put', element });
+			setSelection([element.id]);
+			setDrafts(new Map([[element.id, element]]));
+			setEditingId(element.id);
+			setTool('select');
+		},
+		[commit],
+	);
+
+	/** Places an object at the center of the visible canvas, cascading when that spot is taken. */
+	const placeObject = useCallback(
+		(kind: ObjectKind) => {
+			if (board.permission !== 'edit') return;
+			const rect = svgRef.current?.getBoundingClientRect();
+			const canvas = { width: rect?.width ?? 960, height: rect?.height ?? 600 };
+			insertObject(createObjectAt(kind, centerPlacement(viewport, canvas, board.elements.values()), style));
+		},
+		[board.elements, board.permission, insertObject, style, viewport],
+	);
+
 	useEffect(() => {
 		function onKeyDown(event: KeyboardEvent) {
 			if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
@@ -256,8 +249,15 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 				deleteSelection();
 				return;
 			}
-			const match = TOOLS.find((item) => item.key?.toLowerCase() === event.key.toLowerCase());
-			if (match && !command) setTool(match.id);
+			if (!command) {
+				const mode = MODE_TOOLS.find((item) => item.key.toLowerCase() === event.key.toLowerCase());
+				if (mode) setTool(mode.id);
+				const tile = OBJECT_TILES.find((item) => item.key.toLowerCase() === event.key.toLowerCase());
+				if (tile) {
+					event.preventDefault();
+					placeObject(tile.id);
+				}
+			}
 			if (event.key === 'Escape') {
 				setSelection([]);
 				setTool('select');
@@ -272,11 +272,59 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 		}
 		window.addEventListener('keydown', onKeyDown);
 		return () => window.removeEventListener('keydown', onKeyDown);
-	}, [commit, commitWithBoundConnectors, deleteSelection, duplicateSelection, redo, selected, selection.length, undo]);
+	}, [commit, commitWithBoundConnectors, deleteSelection, duplicateSelection, placeObject, redo, selected, selection.length, undo]);
+
+	function worldPointFromClient(clientX: number, clientY: number): Point {
+		const rect = svgRef.current!.getBoundingClientRect();
+		return { x: (clientX - rect.left - viewport.x) / viewport.zoom, y: (clientY - rect.top - viewport.y) / viewport.zoom };
+	}
 
 	function worldPoint(event: React.PointerEvent<SVGSVGElement>): Point {
-		const rect = svgRef.current!.getBoundingClientRect();
-		return { x: (event.clientX - rect.left - viewport.x) / viewport.zoom, y: (event.clientY - rect.top - viewport.y) / viewport.zoom };
+		return worldPointFromClient(event.clientX, event.clientY);
+	}
+
+	function isOverCanvas(clientX: number, clientY: number): boolean {
+		const rect = svgRef.current?.getBoundingClientRect();
+		return Boolean(rect && clientX >= rect.left && clientX <= rect.right && clientY >= rect.top && clientY <= rect.bottom);
+	}
+
+	/** Starts a palette drag; the object materializes as a draft once the pointer is over the board. */
+	function beginInsert(event: React.PointerEvent<HTMLButtonElement>, objectKind: ObjectKind) {
+		if (board.permission !== 'edit' || event.button !== 0) return;
+		event.currentTarget.setPointerCapture(event.pointerId);
+		pointerRef.current = { kind: 'insert', objectKind, element: null, overCanvas: false };
+	}
+
+	function onInsertMove(event: React.PointerEvent<HTMLButtonElement>) {
+		const gesture = pointerRef.current;
+		if (gesture?.kind !== 'insert') return;
+		if (!isOverCanvas(event.clientX, event.clientY)) {
+			gesture.overCanvas = false;
+			if (gesture.element) {
+				gesture.element = null;
+				setDrafts(new Map());
+			}
+			return;
+		}
+		const center = worldPointFromClient(event.clientX, event.clientY);
+		const element = gesture.element
+			? { ...gesture.element, x: center.x - gesture.element.width / 2, y: center.y - gesture.element.height / 2 }
+			: createObjectAt(gesture.objectKind, center, style);
+		gesture.element = element;
+		gesture.overCanvas = true;
+		setDrafts(new Map([[element.id, element]]));
+	}
+
+	function onInsertEnd(event: React.PointerEvent<HTMLButtonElement>, committed: boolean) {
+		const gesture = pointerRef.current;
+		if (gesture?.kind !== 'insert') return;
+		pointerRef.current = null;
+		if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+		setDrafts(new Map());
+		if (!committed) return;
+		// Dropping on the board places at the pointer; a tap or short drag places at the center.
+		if (gesture.element && gesture.overCanvas) insertObject(gesture.element);
+		else placeObject(gesture.objectKind);
 	}
 
 	function findTarget(event: React.PointerEvent<SVGSVGElement>) {
@@ -321,6 +369,7 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 			if (targetId) commit({ action: 'delete', elementId: targetId });
 			return;
 		}
+		if (!isDrawTool(tool)) return;
 
 		svgRef.current?.setPointerCapture(event.pointerId);
 		const element = createElement(tool, point, style);
@@ -375,6 +424,8 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 			setDrafts(new Map([[gesture.element.id, gesture.element]]));
 			return;
 		}
+		// Palette inserts are tracked on the tile itself and never reach the canvas handlers.
+		if (gesture.kind !== 'draw') return;
 		const updated = updateDrawnElement(gesture.element, gesture.start, point);
 		gesture.element = updated;
 		setDrafts(new Map([[updated.id, updated]]));
@@ -413,7 +464,25 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 				};
 				commit({ action: 'put', element: arrow });
 				setSelection([arrow.id]);
-			} else setSelection([gesture.source.id]);
+			} else {
+				// Releasing on empty canvas grows the diagram: create a node already wired to the source.
+				const created = createObjectAt('rectangle', point, style);
+				const { start, end } = connectorPoints(gesture.source, created);
+				commit({ action: 'put', element: created });
+				commit({
+					action: 'put',
+					element: {
+						...gesture.element,
+						x: start.x,
+						y: start.y,
+						width: end.x - start.x,
+						height: end.y - start.y,
+						sourceId: gesture.source.id,
+						targetId: created.id,
+					},
+				});
+				insertObject(created);
+			}
 			return;
 		}
 		if (gesture.kind === 'move') {
@@ -426,26 +495,15 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 			commitWithBoundConnectors([gesture.current]);
 			return;
 		}
-		const final = [gesture.element];
-		let textBox: BoardElement | undefined;
+		if (gesture.kind !== 'draw') return;
+		const element = gesture.element;
 		setDrafts(new Map());
-		for (const element of final) {
-			const drawable =
-				(element.type === 'freehand' || element.type === 'highlighter') && element.points?.length === 1
-					? { ...element, points: [...element.points, { x: element.points[0].x + 0.1, y: element.points[0].y + 0.1 }] }
-					: element;
-			const next =
-				gesture.kind === 'draw' && drawable.type === 'rectangle'
-					? { ...drawable, width: Math.max(160, drawable.width), height: Math.max(64, drawable.height), text: '' }
-					: drawable;
-			commit({ action: 'put', element: next });
-			if (gesture.kind === 'draw' && next.type === 'rectangle') textBox = next;
-		}
-		if (textBox) {
-			setSelection([textBox.id]);
-			setDrafts(new Map([[textBox.id, textBox]]));
-			setEditingId(textBox.id);
-		}
+		// A single-point stroke still deserves a visible dot.
+		const drawable =
+			(element.type === 'freehand' || element.type === 'highlighter') && element.points?.length === 1
+				? { ...element, points: [...element.points, { x: element.points[0].x + 0.1, y: element.points[0].y + 0.1 }] }
+				: element;
+		commit({ action: 'put', element: drawable });
 	}
 
 	function beginTextEditing(element: BoardElement) {
@@ -618,28 +676,27 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 						}}
 					/>
 				)}
+				<a className="button small ghost source-link" href={REPO_URL} target="_blank" rel="noreferrer">
+					<Code2 size={16} />
+					<span>Source</span>
+				</a>
 				<button className="button small primary" onClick={() => setShareOpen(true)}>
 					<Share2 size={16} /> Share
 				</button>
 			</header>
 
+			{board.permission === 'edit' && (
+				<ShapePalette
+					tool={tool}
+					onSelectTool={setTool}
+					onPlaceObject={placeObject}
+					onBeginInsert={beginInsert}
+					onInsertMove={onInsertMove}
+					onInsertEnd={onInsertEnd}
+				/>
+			)}
+
 			<div className="board-workspace">
-				{board.permission === 'edit' && (
-					<aside className="tool-rail" aria-label="Drawing tools">
-						{TOOLS.map(({ id, label, icon: Icon, key }) => (
-							<button
-								key={id}
-								className={tool === id ? 'active' : ''}
-								onClick={() => setTool(id)}
-								aria-pressed={tool === id}
-								aria-label={`${label}${key ? ` (${key})` : ''}`}
-								title={`${label}${key ? ` (${key})` : ''}`}
-							>
-								<Icon />
-							</button>
-						))}
-					</aside>
-				)}
 				<div className="canvas-wrap">
 					<svg
 						ref={svgRef}
@@ -777,6 +834,9 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 						</button>
 						<button onClick={fitBoard}>Fit</button>
 					</div>
+					{board.permission === 'edit' && !renderedElements.length && (
+						<p className="canvas-hint">Click a shape above to drop it here, or drag one onto the board.</p>
+					)}
 					{board.permission === 'view' && <span className="view-badge">View only</span>}
 					{board.status !== 'connected' && (
 						<div className="reconnect-banner">
@@ -977,22 +1037,19 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 	);
 }
 
-function createElement(tool: Tool, point: Point, style: ElementStyle): BoardElement {
+function createElement(tool: DrawTool | 'arrow', point: Point, style: ElementStyle): BoardElement {
 	const type: ElementType = tool === 'pencil' ? 'freehand' : (tool as ElementType);
-	const text = tool === 'sticky' ? 'New idea' : tool === 'text' ? 'Type something' : undefined;
 	return {
 		id: crypto.randomUUID(),
 		type,
 		x: point.x,
 		y: point.y,
-		width: tool === 'text' ? 180 : 1,
-		height: tool === 'text' ? 40 : 1,
+		width: 1,
+		height: 1,
 		rotation: 0,
-		points: ['pencil', 'highlighter'].includes(tool) ? [{ x: 0, y: 0 }] : undefined,
-		text,
+		points: tool === 'pencil' || tool === 'highlighter' ? [{ x: 0, y: 0 }] : undefined,
 		style: {
 			...style,
-			fill: tool === 'sticky' ? '#FFF3AE' : style.fill,
 			endArrow: tool === 'line' || tool === 'arrow' ? 'arrow' : style.endArrow,
 		},
 		zIndex: Date.now(),
@@ -1185,6 +1242,10 @@ function InvalidBoard() {
 			<p>Anonymous boards are removed after 30 days without an edit.</p>
 			<a className="button primary" href="/">
 				Create a new board
+			</a>
+			<a className="button ghost source-link" href={REPO_URL} target="_blank" rel="noreferrer">
+				<Code2 size={16} />
+				<span>View the reference sample</span>
 			</a>
 		</main>
 	);

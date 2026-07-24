@@ -23,9 +23,11 @@ The editor itself is built with React and SVG. It includes drawing, shapes, text
 ## Features
 
 - Anonymous board creation with separate edit and view capability links
-- Repeat-friendly drawing tools stay active after placement; text boxes edit immediately, closed shapes support wrapped text, and connector handles expose configurable arrowheads
+- Palette-first authoring: click a shape tile to place it at the center of the view, or drag the tile onto the board to drop it exactly where you want
+- Consistent creation sizes keep diagrams tidy; every placed object opens its text editor immediately and wraps text as it grows
+- Dragging a connector handle onto empty canvas creates the next node already wired to the source
 - Marquee and shift multi-selection with shared movement, styling, deletion, alignment, duplication, locking, layering, and keyboard nudging
-- Bound connectors stay attached when source or destination shapes move or resize
+- Bound connectors stay attached when source or destination shapes move or resize, with configurable start and end arrowheads
 - Pan, zoom, touch controls, fit-to-board, and responsive mobile toolbars
 - Live collaborator cursors, selections, names, and connection status
 - Per-user undo and redo

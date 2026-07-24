@@ -1,6 +1,7 @@
 /** Kumo-styled product page and anonymous board-creation flow. */
 import { ArrowRight, Clock3, Code2, Database, MousePointer2, Network, Pencil, Share2, Sparkles, UsersRound, Zap } from 'lucide-react';
 import { useState } from 'react';
+import { REPO_URL } from '../../shared/constants';
 import { CornerSquares } from '../components/CornerSquares';
 import { Logo } from '../components/Logo';
 
@@ -43,7 +44,7 @@ export function LandingPage() {
 				<nav aria-label="Primary navigation">
 					<a href="#features">Features</a>
 					<a href="#architecture">Architecture</a>
-					<a href="https://github.com/Gryczka" target="_blank" rel="noreferrer">
+					<a href={REPO_URL} target="_blank" rel="noreferrer">
 						<Code2 size={16} /> GitHub
 					</a>
 				</nav>
@@ -215,7 +216,7 @@ export function LandingPage() {
 				<p>An unofficial reference project built for the gryczka.dev Unrefined App Garden.</p>
 				<div>
 					<a href="https://developers.cloudflare.com/durable-objects/">Durable Objects docs</a>
-					<a href="https://github.com/Gryczka">Source</a>
+					<a href={REPO_URL}>Source</a>
 				</div>
 			</footer>
 		</div>
