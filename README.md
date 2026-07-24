@@ -24,7 +24,8 @@ The editor itself is built with React and SVG. It includes drawing, shapes, text
 
 - Anonymous board creation with separate edit and view capability links
 - Repeat-friendly drawing tools stay active after placement; text boxes edit immediately, closed shapes support wrapped text, and connector handles expose configurable arrowheads
-- Multi-selection, resize, duplicate, lock, group, align, layer ordering, clipboard, and keyboard nudging
+- Marquee and shift multi-selection with shared movement, styling, deletion, alignment, duplication, locking, layering, and keyboard nudging
+- Bound connectors stay attached when source or destination shapes move or resize
 - Pan, zoom, touch controls, fit-to-board, and responsive mobile toolbars
 - Live collaborator cursors, selections, names, and connection status
 - Per-user undo and redo

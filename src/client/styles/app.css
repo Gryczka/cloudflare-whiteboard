@@ -956,6 +956,13 @@ h3 {
 .connector-handle {
 	cursor: crosshair;
 }
+.selection-marquee {
+	fill: rgba(10, 149, 255, 0.12);
+	stroke: #0a95ff;
+	stroke-width: 1;
+	stroke-dasharray: 6 4;
+	vector-effect: non-scaling-stroke;
+}
 .canvas-text-editor {
 	position: absolute;
 	z-index: 8;

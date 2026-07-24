@@ -46,6 +46,8 @@ export interface BoardElement {
 	zIndex: number;
 	locked?: boolean;
 	groupId?: string;
+	sourceId?: string;
+	targetId?: string;
 }
 export interface BoardMetadata {
 	title: string;
@@ -83,6 +85,8 @@ export const boardElementSchema: z.ZodType<BoardElement> = z.object({
 	zIndex: z.number().int().min(-Number.MAX_SAFE_INTEGER).max(Number.MAX_SAFE_INTEGER),
 	locked: z.boolean().optional(),
 	groupId: z.string().uuid().optional(),
+	sourceId: z.string().uuid().optional(),
+	targetId: z.string().uuid().optional(),
 });
 export const operationSchema = z.discriminatedUnion('action', [
 	z.object({ action: z.literal('put'), element: boardElementSchema }),

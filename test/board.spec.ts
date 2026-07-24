@@ -69,6 +69,18 @@ describe('board state', () => {
 			}).success,
 		).toBe(true);
 	});
+
+	it('accepts connectors bound to source and target shapes', () => {
+		expect(
+			boardElementSchema.safeParse({
+				...rectangle,
+				id: crypto.randomUUID(),
+				type: 'arrow',
+				sourceId: crypto.randomUUID(),
+				targetId: crypto.randomUUID(),
+			}).success,
+		).toBe(true);
+	});
 });
 
 describe('Worker and Durable Object integration', () => {

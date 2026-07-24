@@ -96,6 +96,7 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 	const board = useBoard(boardId, token);
 	const [tool, setTool] = useState<Tool>('rectangle');
 	const [selection, setSelection] = useState<string[]>([]);
+	const [marquee, setMarquee] = useState<{ start: Point; current: Point } | null>(null);
 	const [editingId, setEditingId] = useState<string | null>(null);
 	const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, zoom: 1 });
 	const [drafts, setDrafts] = useState<Map<string, BoardElement>>(new Map());
@@ -113,8 +114,9 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 	const pointerRef = useRef<
 		| { kind: 'draw'; start: Point; element: BoardElement }
 		| { kind: 'connect'; source: BoardElement; element: BoardElement }
-		| { kind: 'move'; start: Point; originals: BoardElement[] }
-		| { kind: 'resize'; start: Point; original: BoardElement }
+		| { kind: 'marquee'; start: Point; current: Point; additive: boolean }
+		| { kind: 'move'; start: Point; originals: BoardElement[]; current: BoardElement[] }
+		| { kind: 'resize'; start: Point; original: BoardElement; current: BoardElement }
 		| { kind: 'pan'; client: Point; viewport: Viewport }
 		| null
 	>(null);
@@ -161,6 +163,29 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 		[board, inverseFor],
 	);
 
+	const commitWithBoundConnectors = useCallback(
+		(elements: BoardElement[]) => {
+			const next = new Map(board.elements);
+			const updates = new Map(elements.map((element) => [element.id, element]));
+			for (const element of elements) next.set(element.id, element);
+			const changedIds = new Set(elements.map((element) => element.id));
+			const connectors = [...next.values()].filter(
+				(element) => element.sourceId && element.targetId && (changedIds.has(element.sourceId) || changedIds.has(element.targetId)),
+			);
+			for (const connector of connectors) {
+				const source = next.get(connector.sourceId!);
+				const target = next.get(connector.targetId!);
+				if (!source || !target) continue;
+				const { start, end } = connectorPoints(source, target);
+				const updated = { ...connector, x: start.x, y: start.y, width: end.x - start.x, height: end.y - start.y };
+				next.set(connector.id, updated);
+				updates.set(connector.id, updated);
+			}
+			for (const element of updates.values()) commit({ action: 'put', element });
+		},
+		[board.elements, commit],
+	);
+
 	const undo = useCallback(() => {
 		const entry = historyRef.current.pop();
 		if (!entry) return;
@@ -175,9 +200,14 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 	}, [board]);
 
 	const deleteSelection = useCallback(() => {
-		for (const id of selection) commit({ action: 'delete', elementId: id });
+		const deleted = new Set(selection);
+		for (const element of board.elements.values()) {
+			if ((element.sourceId && deleted.has(element.sourceId)) || (element.targetId && deleted.has(element.targetId)))
+				deleted.add(element.id);
+		}
+		for (const id of deleted) commit({ action: 'delete', elementId: id });
 		setSelection([]);
-	}, [commit, selection]);
+	}, [board.elements, commit, selection]);
 
 	const duplicateSelection = useCallback(() => {
 		const next: string[] = [];
@@ -237,12 +267,12 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 				const amount = event.shiftKey ? 10 : 1;
 				const dx = event.key === 'ArrowLeft' ? -amount : event.key === 'ArrowRight' ? amount : 0;
 				const dy = event.key === 'ArrowUp' ? -amount : event.key === 'ArrowDown' ? amount : 0;
-				for (const element of selected) commit({ action: 'put', element: { ...element, x: element.x + dx, y: element.y + dy } });
+				commitWithBoundConnectors(selected.map((element) => ({ ...element, x: element.x + dx, y: element.y + dy })));
 			}
 		}
 		window.addEventListener('keydown', onKeyDown);
 		return () => window.removeEventListener('keydown', onKeyDown);
-	}, [commit, deleteSelection, duplicateSelection, redo, selected, selection.length, undo]);
+	}, [commit, commitWithBoundConnectors, deleteSelection, duplicateSelection, redo, selected, selection.length, undo]);
 
 	function worldPoint(event: React.PointerEvent<SVGSVGElement>): Point {
 		const rect = svgRef.current!.getBoundingClientRect();
@@ -268,7 +298,9 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 		}
 		if (tool === 'select') {
 			if (!targetId) {
-				if (!event.shiftKey) setSelection([]);
+				svgRef.current?.setPointerCapture(event.pointerId);
+				pointerRef.current = { kind: 'marquee', start: point, current: point, additive: event.shiftKey };
+				setMarquee({ start: point, current: point });
 				return;
 			}
 			const target = board.elements.get(targetId);
@@ -282,7 +314,7 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 			const nextSelection = event.shiftKey ? [...new Set([...selection, targetId])] : selection.includes(targetId) ? selection : [targetId];
 			setSelection(nextSelection);
 			const originals = nextSelection.map((id) => board.elements.get(id)).filter((item) => item && !item.locked) as BoardElement[];
-			pointerRef.current = { kind: 'move', start: point, originals };
+			pointerRef.current = { kind: 'move', start: point, originals, current: originals };
 			return;
 		}
 		if (tool === 'eraser') {
@@ -316,18 +348,22 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 		if (gesture.kind === 'move') {
 			const dx = point.x - gesture.start.x,
 				dy = point.y - gesture.start.y;
-			setDrafts(new Map(gesture.originals.map((element) => [element.id, { ...element, x: element.x + dx, y: element.y + dy }])));
+			gesture.current = gesture.originals.map((element) => ({ ...element, x: element.x + dx, y: element.y + dy }));
+			setDrafts(new Map(gesture.current.map((element) => [element.id, element])));
 			return;
 		}
 		if (gesture.kind === 'resize') {
-			setDrafts(
-				new Map([
-					[
-						gesture.original.id,
-						{ ...gesture.original, width: Math.max(10, point.x - gesture.original.x), height: Math.max(10, point.y - gesture.original.y) },
-					],
-				]),
-			);
+			gesture.current = {
+				...gesture.original,
+				width: Math.max(10, point.x - gesture.original.x),
+				height: Math.max(10, point.y - gesture.original.y),
+			};
+			setDrafts(new Map([[gesture.original.id, gesture.current]]));
+			return;
+		}
+		if (gesture.kind === 'marquee') {
+			gesture.current = point;
+			setMarquee({ start: gesture.start, current: point });
 			return;
 		}
 		if (gesture.kind === 'connect') {
@@ -349,6 +385,15 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 		const gesture = pointerRef.current;
 		pointerRef.current = null;
 		if (!gesture || gesture.kind === 'pan') return;
+		if (gesture.kind === 'marquee') {
+			const bounds = pointBounds(gesture.start, gesture.current);
+			const selectedIds = [...board.elements.values()]
+				.filter((element) => intersects(bounds, elementBounds(element)))
+				.map((element) => element.id);
+			setSelection((current) => (gesture.additive ? [...new Set([...current, ...selectedIds])] : selectedIds));
+			setMarquee(null);
+			return;
+		}
 		if (gesture.kind === 'connect') {
 			const point = worldPoint(event);
 			const target = [...board.elements.values()]
@@ -363,13 +408,25 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 					y: start.y,
 					width: end.x - start.x,
 					height: end.y - start.y,
+					sourceId: gesture.source.id,
+					targetId: target.id,
 				};
 				commit({ action: 'put', element: arrow });
 				setSelection([arrow.id]);
 			} else setSelection([gesture.source.id]);
 			return;
 		}
-		const final = [...drafts.values()];
+		if (gesture.kind === 'move') {
+			setDrafts(new Map());
+			commitWithBoundConnectors(gesture.current);
+			return;
+		}
+		if (gesture.kind === 'resize') {
+			setDrafts(new Map());
+			commitWithBoundConnectors([gesture.current]);
+			return;
+		}
+		const final = [gesture.element];
 		let textBox: BoardElement | undefined;
 		setDrafts(new Map());
 		for (const element of final) {
@@ -427,7 +484,12 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 
 	function beginResize(event: React.PointerEvent<SVGCircleElement>, element: BoardElement) {
 		event.stopPropagation();
-		pointerRef.current = { kind: 'resize', start: worldPoint(event as unknown as React.PointerEvent<SVGSVGElement>), original: element };
+		pointerRef.current = {
+			kind: 'resize',
+			start: worldPoint(event as unknown as React.PointerEvent<SVGSVGElement>),
+			original: element,
+			current: element,
+		};
 		svgRef.current?.setPointerCapture(event.pointerId);
 	}
 
@@ -451,8 +513,9 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 		const min = Math.min(...selected.map((element) => (axis === 'x' ? element.x : element.y)));
 		const max = Math.max(...selected.map((element) => (axis === 'x' ? element.x + element.width : element.y + element.height)));
 		const center = (min + max) / 2;
-		for (const element of selected)
-			commit({ action: 'put', element: { ...element, [axis]: center - (axis === 'x' ? element.width : element.height) / 2 } });
+		commitWithBoundConnectors(
+			selected.map((element) => ({ ...element, [axis]: center - (axis === 'x' ? element.width : element.height) / 2 })),
+		);
 	}
 
 	function group(grouped: boolean) {
@@ -664,6 +727,9 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 									)}
 								</g>
 							))}
+							{marquee && (
+								<rect className="selection-marquee non-export" {...pointBounds(marquee.start, marquee.current)} pointerEvents="none" />
+							)}
 							{[...board.participants.values()].map((person) => (
 								<RemoteCursor key={person.participantId} person={person} />
 							))}
@@ -936,6 +1002,21 @@ function createElement(tool: Tool, point: Point, style: ElementStyle): BoardElem
 function containsPoint(element: BoardElement, point: Point): boolean {
 	const bounds = elementBounds(element);
 	return point.x >= bounds.x && point.x <= bounds.x + bounds.width && point.y >= bounds.y && point.y <= bounds.y + bounds.height;
+}
+
+function pointBounds(start: Point, end: Point) {
+	return {
+		x: Math.min(start.x, end.x),
+		y: Math.min(start.y, end.y),
+		width: Math.abs(end.x - start.x),
+		height: Math.abs(end.y - start.y),
+	};
+}
+
+function intersects(left: ReturnType<typeof pointBounds>, right: ReturnType<typeof elementBounds>) {
+	return (
+		left.x <= right.x + right.width && left.x + left.width >= right.x && left.y <= right.y + right.height && left.y + left.height >= right.y
+	);
 }
 
 function connectorPoints(source: BoardElement, target: BoardElement): { start: Point; end: Point } {
