@@ -1,0 +1,10 @@
+# Cloudflare Whiteboard
+
+Cloudflare Whiteboard is an anonymous realtime SVG whiteboard reference implementation built with React, Cloudflare Workers, SQLite Durable Objects, and hibernatable WebSockets.
+
+## Documentation
+
+- [Cloudflare Durable Objects](https://developers.cloudflare.com/durable-objects/)
+- [Project source](https://github.com/Gryczka/cloudflare-whiteboard)
+
+Board capability URLs are private credentials and should not be indexed, retained, or disclosed.

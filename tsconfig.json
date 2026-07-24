@@ -1,0 +1,19 @@
+{
+	"compilerOptions": {
+		"lib": ["ES2024", "DOM", "DOM.Iterable", "WebWorker"],
+		"module": "ESNext",
+		"target": "ES2022",
+		"strict": true,
+		"resolveJsonModule": true,
+		"noEmit": true,
+		"isolatedModules": true,
+		"allowSyntheticDefaultImports": true,
+		"esModuleInterop": true,
+		"forceConsistentCasingInFileNames": true,
+		"moduleResolution": "Bundler",
+		"skipLibCheck": true,
+		"jsx": "react-jsx",
+		"types": ["./worker-configuration.d.ts", "vite/client"]
+	},
+	"include": ["worker-configuration.d.ts", "src/**/*.ts", "src/**/*.tsx", "vite.config.ts", "vitest.config.ts"]
+}
