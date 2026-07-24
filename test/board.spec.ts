@@ -59,6 +59,16 @@ describe('board state', () => {
 			}).success,
 		).toBe(true);
 	});
+
+	it('accepts configurable arrowheads on connector lines', () => {
+		expect(
+			boardElementSchema.safeParse({
+				...rectangle,
+				type: 'line',
+				style: { ...rectangle.style, startArrow: 'dot', endArrow: 'diamond' },
+			}).success,
+		).toBe(true);
+	});
 });
 
 describe('Worker and Durable Object integration', () => {

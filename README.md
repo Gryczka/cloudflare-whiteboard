@@ -23,7 +23,7 @@ The editor itself is built with React and SVG. It includes drawing, shapes, text
 ## Features
 
 - Anonymous board creation with separate edit and view capability links
-- Default text-box drawing with immediate editing, wrapped text on any closed shape, connector handles for drag-to-link arrows, plus persistent freehand drawing
+- Default text-box drawing with immediate editing, wrapped text on any closed shape, connector handles with configurable arrowheads, plus persistent freehand drawing
 - Multi-selection, resize, duplicate, lock, group, align, layer ordering, clipboard, and keyboard nudging
 - Pan, zoom, touch controls, fit-to-board, and responsive mobile toolbars
 - Live collaborator cursors, selections, names, and connection status
@@ -31,7 +31,7 @@ The editor itself is built with React and SVG. It includes drawing, shapes, text
 - PNG, standalone SVG, and versioned JSON export; validated JSON import
 - Thirty-day sliding expiration driven by a Durable Object alarm
 - Server-side element, message, connection, and operation-rate limits
-- Current Cloudflare Kumo product-page visual language with automatic dark mode
+- High-contrast light palette using the current Cloudflare Kumo product-page visual language
 
 ## Architecture
 

@@ -15,6 +15,8 @@ export const ELEMENT_TYPES = [
 ] as const;
 
 export type ElementType = (typeof ELEMENT_TYPES)[number];
+export const ARROW_HEADS = ['none', 'arrow', 'dot', 'diamond'] as const;
+export type ArrowHead = (typeof ARROW_HEADS)[number];
 export interface Point {
 	x: number;
 	y: number;
@@ -27,6 +29,8 @@ export interface ElementStyle {
 	dash: 'solid' | 'dashed' | 'dotted';
 	fontSize: number;
 	textAlign: 'left' | 'center' | 'right';
+	startArrow?: ArrowHead;
+	endArrow?: ArrowHead;
 }
 export interface BoardElement {
 	id: string;
@@ -62,6 +66,8 @@ const styleSchema = z.object({
 	dash: z.enum(['solid', 'dashed', 'dotted']),
 	fontSize: z.number().min(10).max(120),
 	textAlign: z.enum(['left', 'center', 'right']),
+	startArrow: z.enum(ARROW_HEADS).optional(),
+	endArrow: z.enum(ARROW_HEADS).optional(),
 });
 export const boardElementSchema: z.ZodType<BoardElement> = z.object({
 	id: z.string().uuid(),
@@ -94,6 +100,8 @@ export const DEFAULT_STYLE: ElementStyle = {
 	dash: 'solid',
 	fontSize: 24,
 	textAlign: 'left',
+	startArrow: 'none',
+	endArrow: 'none',
 };
 
 /** Applies one canonical operation without mutating the previous element map. */

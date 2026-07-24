@@ -8,6 +8,10 @@ function dashArray(dash: BoardElement['style']['dash']) {
 	return undefined;
 }
 
+function marker(head: BoardElement['style']['startArrow']) {
+	return head && head !== 'none' ? `url(#board-${head})` : undefined;
+}
+
 /** Converts a structured board element into SVG without raw markup injection. */
 export function ElementRenderer({ element, onDoubleClick }: { element: BoardElement; onDoubleClick?: (element: BoardElement) => void }) {
 	const { style } = element;
@@ -50,6 +54,8 @@ export function ElementRenderer({ element, onDoubleClick }: { element: BoardElem
 		const points = `${element.x + element.width / 2},${element.y} ${element.x + element.width},${element.y + element.height / 2} ${element.x + element.width / 2},${element.y + element.height} ${element.x},${element.y + element.height / 2}`;
 		shape = <polygon points={points} {...common} />;
 	} else if (element.type === 'line' || element.type === 'arrow') {
+		const startArrow = style.startArrow ?? 'none';
+		const endArrow = style.endArrow ?? (element.type === 'arrow' ? 'arrow' : 'none');
 		shape = (
 			<line
 				x1={element.x}
@@ -58,7 +64,8 @@ export function ElementRenderer({ element, onDoubleClick }: { element: BoardElem
 				y2={element.y + element.height}
 				{...common}
 				fill="none"
-				markerEnd={element.type === 'arrow' ? 'url(#board-arrow)' : undefined}
+				markerStart={marker(startArrow)}
+				markerEnd={marker(endArrow)}
 			/>
 		);
 	} else if (element.type === 'freehand' || element.type === 'highlighter') {

@@ -34,6 +34,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+	ARROW_HEADS,
 	boardElementSchema,
 	DEFAULT_STYLE,
 	elementBounds,
@@ -600,8 +601,22 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 							>
 								<circle cx="1" cy="1" r="1" fill="var(--dot)" />
 							</pattern>
-							<marker id="board-arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+							<marker
+								id="board-arrow"
+								markerWidth="10"
+								markerHeight="10"
+								refX="8"
+								refY="3"
+								orient="auto-start-reverse"
+								markerUnits="strokeWidth"
+							>
 								<path d="M0,0 L0,6 L9,3 z" fill="context-stroke" />
+							</marker>
+							<marker id="board-dot" markerWidth="8" markerHeight="8" refX="4" refY="4" orient="auto" markerUnits="strokeWidth">
+								<circle cx="4" cy="4" r="3" fill="context-stroke" />
+							</marker>
+							<marker id="board-diamond" markerWidth="10" markerHeight="10" refX="5" refY="5" orient="auto" markerUnits="strokeWidth">
+								<path d="M5 0 L10 5 L5 10 L0 5 Z" fill="context-stroke" />
 							</marker>
 						</defs>
 						<rect width="100%" height="100%" fill="url(#canvas-dots)" />
@@ -772,6 +787,36 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 								<option value="dotted">Dotted</option>
 							</select>
 						</label>
+						{selected.length === 1 && ['line', 'arrow'].includes(selected[0].type) && (
+							<>
+								<label>
+									Start head
+									<select
+										value={selected[0].style.startArrow ?? 'none'}
+										onChange={(event) => updateSelected({ style: { startArrow: event.target.value as ElementStyle['startArrow'] } })}
+									>
+										{ARROW_HEADS.map((head) => (
+											<option key={head} value={head}>
+												{head[0].toUpperCase() + head.slice(1)}
+											</option>
+										))}
+									</select>
+								</label>
+								<label>
+									End head
+									<select
+										value={selected[0].style.endArrow ?? (selected[0].type === 'arrow' ? 'arrow' : 'none')}
+										onChange={(event) => updateSelected({ style: { endArrow: event.target.value as ElementStyle['endArrow'] } })}
+									>
+										{ARROW_HEADS.map((head) => (
+											<option key={head} value={head}>
+												{head[0].toUpperCase() + head.slice(1)}
+											</option>
+										))}
+									</select>
+								</label>
+							</>
+						)}
 						{selected.length === 1 && [...CLOSED_SHAPES, 'text'].includes(selected[0].type) && (
 							<label>
 								Text
@@ -880,7 +925,11 @@ function createElement(tool: Tool, point: Point, style: ElementStyle): BoardElem
 		rotation: 0,
 		points: ['pencil', 'highlighter'].includes(tool) ? [{ x: 0, y: 0 }] : undefined,
 		text,
-		style: { ...style, fill: tool === 'sticky' ? '#FFF3AE' : style.fill },
+		style: {
+			...style,
+			fill: tool === 'sticky' ? '#FFF3AE' : style.fill,
+			endArrow: tool === 'line' || tool === 'arrow' ? 'arrow' : style.endArrow,
+		},
 		zIndex: Date.now(),
 	};
 }
