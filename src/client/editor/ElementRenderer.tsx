@@ -9,7 +9,7 @@ function dashArray(dash: BoardElement['style']['dash']) {
 }
 
 /** Converts a structured board element into SVG without raw markup injection. */
-export function ElementRenderer({ element }: { element: BoardElement }) {
+export function ElementRenderer({ element, onDoubleClick }: { element: BoardElement; onDoubleClick?: (element: BoardElement) => void }) {
 	const { style } = element;
 	const common = {
 		stroke: style.stroke,
@@ -85,7 +85,15 @@ export function ElementRenderer({ element }: { element: BoardElement }) {
 			? element.x
 			: element.x + (style.textAlign === 'center' ? element.width / 2 : style.textAlign === 'right' ? element.width - 14 : 14);
 	return (
-		<g data-element-id={element.id} transform={transform} className={element.locked ? 'element-locked' : undefined}>
+		<g
+			data-element-id={element.id}
+			transform={transform}
+			className={element.locked ? 'element-locked' : undefined}
+			onDoubleClick={(event) => {
+				event.stopPropagation();
+				onDoubleClick?.(element);
+			}}
+		>
 			{shape}
 			{textLines.length > 0 && (
 				<text

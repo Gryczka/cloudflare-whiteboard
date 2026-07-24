@@ -44,6 +44,21 @@ describe('board state', () => {
 		expect(wrapTextLines(text, 180, 24).length).toBeGreaterThan(2);
 		expect(textBoxHeight(text, 180, 24)).toBeGreaterThan(64);
 	});
+
+	it('accepts freehand elements produced by the pencil tool', () => {
+		expect(
+			boardElementSchema.safeParse({
+				...rectangle,
+				type: 'freehand',
+				width: 0,
+				height: 0,
+				points: [
+					{ x: 0, y: 0 },
+					{ x: 20, y: 10 },
+				],
+			}).success,
+		).toBe(true);
+	});
 });
 
 describe('Worker and Durable Object integration', () => {

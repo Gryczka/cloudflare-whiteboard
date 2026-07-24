@@ -953,6 +953,9 @@ h3 {
 .board-svg .element-locked {
 	cursor: not-allowed;
 }
+.connector-handle {
+	cursor: crosshair;
+}
 .canvas-text-editor {
 	position: absolute;
 	z-index: 8;

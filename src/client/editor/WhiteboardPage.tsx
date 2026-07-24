@@ -63,6 +63,7 @@ type Tool =
 	| 'sticky'
 	| 'frame'
 	| 'eraser';
+const CLOSED_SHAPES: BoardElement['type'][] = ['rectangle', 'ellipse', 'diamond', 'sticky', 'frame'];
 interface Viewport {
 	x: number;
 	y: number;
@@ -110,11 +111,13 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 	const clipboardRef = useRef<BoardElement[]>([]);
 	const pointerRef = useRef<
 		| { kind: 'draw'; start: Point; element: BoardElement }
+		| { kind: 'connect'; source: BoardElement; element: BoardElement }
 		| { kind: 'move'; start: Point; originals: BoardElement[] }
 		| { kind: 'resize'; start: Point; original: BoardElement }
 		| { kind: 'pan'; client: Point; viewport: Viewport }
 		| null
 	>(null);
+	const lastShapeClickRef = useRef<{ id: string; at: number } | null>(null);
 	const lastPresenceRef = useRef(0);
 
 	const renderedElements = useMemo(() => {
@@ -246,7 +249,8 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 	}
 
 	function findTarget(event: React.PointerEvent<SVGSVGElement>) {
-		return (event.target as Element).closest('[data-element-id]')?.getAttribute('data-element-id') ?? null;
+		const target = (event.target as Element).closest('[data-element-id], [data-selection-id]');
+		return target?.getAttribute('data-element-id') ?? target?.getAttribute('data-selection-id') ?? null;
 	}
 
 	function onPointerDown(event: React.PointerEvent<SVGSVGElement>) {
@@ -256,8 +260,8 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 		}
 		const point = worldPoint(event);
 		const targetId = findTarget(event);
-		svgRef.current?.setPointerCapture(event.pointerId);
 		if (tool === 'hand' || event.button === 1 || event.buttons === 4) {
+			svgRef.current?.setPointerCapture(event.pointerId);
 			pointerRef.current = { kind: 'pan', client: { x: event.clientX, y: event.clientY }, viewport };
 			return;
 		}
@@ -266,6 +270,14 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 				if (!event.shiftKey) setSelection([]);
 				return;
 			}
+			const target = board.elements.get(targetId);
+			const previousClick = lastShapeClickRef.current;
+			if (target && previousClick?.id === targetId && event.timeStamp - previousClick.at < 450) {
+				lastShapeClickRef.current = null;
+				beginTextEditing(target);
+				return;
+			}
+			lastShapeClickRef.current = { id: targetId, at: event.timeStamp };
 			const nextSelection = event.shiftKey ? [...new Set([...selection, targetId])] : selection.includes(targetId) ? selection : [targetId];
 			setSelection(nextSelection);
 			const originals = nextSelection.map((id) => board.elements.get(id)).filter((item) => item && !item.locked) as BoardElement[];
@@ -277,6 +289,7 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 			return;
 		}
 
+		svgRef.current?.setPointerCapture(event.pointerId);
 		const element = createElement(tool, point, style);
 		pointerRef.current = { kind: 'draw', start: point, element };
 		setDrafts(new Map([[element.id, element]]));
@@ -316,25 +329,57 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 			);
 			return;
 		}
+		if (gesture.kind === 'connect') {
+			gesture.element = {
+				...gesture.element,
+				width: point.x - gesture.element.x,
+				height: point.y - gesture.element.y,
+			};
+			setDrafts(new Map([[gesture.element.id, gesture.element]]));
+			return;
+		}
 		const updated = updateDrawnElement(gesture.element, gesture.start, point);
 		gesture.element = updated;
 		setDrafts(new Map([[updated.id, updated]]));
 	}
 
 	function onPointerUp(event: React.PointerEvent<SVGSVGElement>) {
-		svgRef.current?.releasePointerCapture(event.pointerId);
+		if (svgRef.current?.hasPointerCapture(event.pointerId)) svgRef.current.releasePointerCapture(event.pointerId);
 		const gesture = pointerRef.current;
 		pointerRef.current = null;
 		if (!gesture || gesture.kind === 'pan') return;
+		if (gesture.kind === 'connect') {
+			const point = worldPoint(event);
+			const target = [...board.elements.values()]
+				.reverse()
+				.find((element) => element.id !== gesture.source.id && CLOSED_SHAPES.includes(element.type) && containsPoint(element, point));
+			setDrafts(new Map());
+			if (target) {
+				const { start, end } = connectorPoints(gesture.source, target);
+				const arrow = {
+					...gesture.element,
+					x: start.x,
+					y: start.y,
+					width: end.x - start.x,
+					height: end.y - start.y,
+				};
+				commit({ action: 'put', element: arrow });
+				setSelection([arrow.id]);
+			} else setSelection([gesture.source.id]);
+			return;
+		}
 		const final = [...drafts.values()];
 		let textBox: BoardElement | undefined;
 		setDrafts(new Map());
 		for (const element of final) {
-			if ((element.type === 'freehand' || element.type === 'highlighter') && (element.points?.length ?? 0) < 2) continue;
-			const next =
-				gesture.kind === 'draw' && element.type === 'rectangle'
-					? { ...element, width: Math.max(160, element.width), height: Math.max(64, element.height), text: '' }
+			const drawable =
+				(element.type === 'freehand' || element.type === 'highlighter') && element.points?.length === 1
+					? { ...element, points: [...element.points, { x: element.points[0].x + 0.1, y: element.points[0].y + 0.1 }] }
 					: element;
+			const next =
+				gesture.kind === 'draw' && drawable.type === 'rectangle'
+					? { ...drawable, width: Math.max(160, drawable.width), height: Math.max(64, drawable.height), text: '' }
+					: drawable;
 			commit({ action: 'put', element: next });
 			if (gesture.kind === 'draw' && next.type === 'rectangle') textBox = next;
 		}
@@ -347,11 +392,20 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 	}
 
 	function beginTextEditing(element: BoardElement) {
-		if (board.permission !== 'edit' || !['rectangle', 'sticky', 'text'].includes(element.type)) return;
+		if (board.permission !== 'edit' || ![...CLOSED_SHAPES, 'text'].includes(element.type)) return;
 		setSelection([element.id]);
 		setDrafts((current) => new Map(current).set(element.id, element));
 		setEditingId(element.id);
 		setTool('select');
+	}
+
+	function beginConnection(event: React.PointerEvent<SVGElement>, source: BoardElement) {
+		event.stopPropagation();
+		const start = { x: source.x + source.width, y: source.y + source.height / 2 };
+		const arrow = createElement('arrow', start, style);
+		pointerRef.current = { kind: 'connect', source, element: arrow };
+		setDrafts(new Map([[arrow.id, arrow]]));
+		svgRef.current?.setPointerCapture(event.pointerId);
 	}
 
 	function finishTextEditing() {
@@ -553,10 +607,10 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 						<rect width="100%" height="100%" fill="url(#canvas-dots)" />
 						<g transform={`translate(${viewport.x} ${viewport.y}) scale(${viewport.zoom})`}>
 							{renderedElements.map((element) => (
-								<ElementRenderer key={element.id} element={element} />
+								<ElementRenderer key={element.id} element={element} onDoubleClick={beginTextEditing} />
 							))}
 							{selected.map((element) => (
-								<g key={`selection-${element.id}`} className="non-export">
+								<g key={`selection-${element.id}`} className="non-export" pointerEvents="none">
 									<rect
 										x={element.x - 5}
 										y={element.y - 5}
@@ -565,6 +619,7 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 										fill="none"
 										stroke="#0A95FF"
 										strokeWidth={1.5 / viewport.zoom}
+										pointerEvents="none"
 										strokeDasharray={`${5 / viewport.zoom} ${4 / viewport.zoom}`}
 									/>
 									<circle
@@ -574,8 +629,25 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 										fill="#fff"
 										stroke="#0A95FF"
 										strokeWidth={1.5 / viewport.zoom}
+										pointerEvents="all"
 										onPointerDown={(event) => beginResize(event, element)}
 									/>
+									{selected.length === 1 && CLOSED_SHAPES.includes(element.type) && !editingId && !element.locked && (
+										<g
+											className="connector-handle"
+											pointerEvents="all"
+											transform={`translate(${element.x + element.width + 25} ${element.y + element.height / 2})`}
+											onPointerDown={(event) => beginConnection(event, element)}
+										>
+											<circle r={10 / viewport.zoom} fill="#0A95FF" stroke="#fff" strokeWidth={2 / viewport.zoom} />
+											<path
+												d={`M ${-4 / viewport.zoom} 0 H ${4 / viewport.zoom} M ${1 / viewport.zoom} ${-3 / viewport.zoom} L ${4 / viewport.zoom} 0 L ${1 / viewport.zoom} ${3 / viewport.zoom}`}
+												fill="none"
+												stroke="#fff"
+												strokeWidth={1.5 / viewport.zoom}
+											/>
+										</g>
+									)}
 								</g>
 							))}
 							{[...board.participants.values()].map((person) => (
@@ -700,7 +772,7 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 								<option value="dotted">Dotted</option>
 							</select>
 						</label>
-						{selected.length === 1 && ['rectangle', 'text', 'sticky'].includes(selected[0].type) && (
+						{selected.length === 1 && [...CLOSED_SHAPES, 'text'].includes(selected[0].type) && (
 							<label>
 								Text
 								<textarea
@@ -796,7 +868,7 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 }
 
 function createElement(tool: Tool, point: Point, style: ElementStyle): BoardElement {
-	const type = tool as ElementType;
+	const type: ElementType = tool === 'pencil' ? 'freehand' : (tool as ElementType);
 	const text = tool === 'sticky' ? 'New idea' : tool === 'text' ? 'Type something' : undefined;
 	return {
 		id: crypto.randomUUID(),
@@ -811,6 +883,30 @@ function createElement(tool: Tool, point: Point, style: ElementStyle): BoardElem
 		style: { ...style, fill: tool === 'sticky' ? '#FFF3AE' : style.fill },
 		zIndex: Date.now(),
 	};
+}
+
+function containsPoint(element: BoardElement, point: Point): boolean {
+	const bounds = elementBounds(element);
+	return point.x >= bounds.x && point.x <= bounds.x + bounds.width && point.y >= bounds.y && point.y <= bounds.y + bounds.height;
+}
+
+function connectorPoints(source: BoardElement, target: BoardElement): { start: Point; end: Point } {
+	const sourceCenter = { x: source.x + source.width / 2, y: source.y + source.height / 2 };
+	const targetCenter = { x: target.x + target.width / 2, y: target.y + target.height / 2 };
+	return {
+		start: edgePoint(source, targetCenter),
+		end: edgePoint(target, sourceCenter),
+	};
+}
+
+function edgePoint(element: BoardElement, toward: Point): Point {
+	const center = { x: element.x + element.width / 2, y: element.y + element.height / 2 };
+	const dx = toward.x - center.x;
+	const dy = toward.y - center.y;
+	const horizontal = Math.abs(dx) / Math.max(1, element.width) >= Math.abs(dy) / Math.max(1, element.height);
+	return horizontal
+		? { x: dx >= 0 ? element.x + element.width : element.x, y: center.y }
+		: { x: center.x, y: dy >= 0 ? element.y + element.height : element.y };
 }
 
 function updateDrawnElement(element: BoardElement, start: Point, point: Point): BoardElement {
