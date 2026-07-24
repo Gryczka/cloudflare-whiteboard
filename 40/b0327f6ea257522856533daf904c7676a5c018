@@ -1,0 +1,23 @@
+src/client/editor/ShapePalette.tsx
+  s_d480d0d4917b4a::t_1e780e73a28aad 1-92
+src/client/editor/palette-items.ts
+  s_d480d0d4917b4a::t_bc9fa59c8e2870 1-25
+src/client/styles/app.css
+  s_d480d0d4917b4a::t_028c154e82a25b 769-770,894-896,899-904,906-911,916-918,926,929,934-1001,1366,1517-1524
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "40b0327f6ea257522856533daf904c7676a5c018",
+  "prompts": {},
+  "sessions": {
+    "s_d480d0d4917b4a": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_07051eeacffemX7j3UI26MoA9T",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "gryczka <pgryczka@cloudflare.com>"
+    }
+  }
+}
