@@ -1,0 +1,21 @@
+README.md
+  s_d480d0d4917b4a::t_d14d84c2656327 26
+src/client/editor/WhiteboardPage.tsx
+  s_d480d0d4917b4a::t_6130654ee49d82 571
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "179a67d3cdff96c2d71c39d87f3b7a7b135fe11b",
+  "prompts": {},
+  "sessions": {
+    "s_d480d0d4917b4a": {
+      "agent_id": {
+        "tool": "opencode",
+        "id": "ses_07051eeacffemX7j3UI26MoA9T",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "gryczka <pgryczka@cloudflare.com>"
+    }
+  }
+}
