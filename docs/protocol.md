@@ -19,6 +19,14 @@ The Durable Object responds with `welcome` containing metadata, participants, an
 
 The Durable Object sends `operation-applied` only after SQLite persistence succeeds. It includes the canonical operation and monotonically increasing `serverSeq`.
 
+## Chat
+
+`chat` carries a trimmed body of 1–500 characters. The Durable Object stamps identity from the authenticated connection attachment rather than trusting the client, writes the message to SQLite, prunes history beyond 200 messages, and then broadcasts `chat` to every connection including the sender.
+
+Because the sender waits for that echo instead of rendering optimistically, all participants observe one server-defined order and a reconnect cannot duplicate a message. `welcome` carries the retained history, so a reloading browser recovers the conversation.
+
+Only edit capabilities may post. A view-only connection receives an `error` and nothing is stored. Chat does not advance the board sequence and does not extend expiry, which stays edit-based.
+
 ## Transient messages
 
 `presence` includes cursor coordinates, selection IDs, and current tool. It is stored only in the WebSocket attachment and relayed to peers. Presence never changes board expiry and is not replayed after disconnect.

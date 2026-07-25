@@ -3,11 +3,13 @@ import { DurableObject } from 'cloudflare:workers';
 import { hashToken, safeEqual } from '../shared/crypto';
 import { type BoardElement, type BoardMetadata, type BoardOperation } from '../shared/board';
 import {
+	CHAT_HISTORY_LIMIT,
 	clientMessageSchema,
 	MAX_CONNECTIONS,
 	MAX_ELEMENTS,
 	MAX_MESSAGE_BYTES,
 	OPLOG_LIMIT,
+	type ChatMessage,
 	type Presence,
 	type ServerMessage,
 } from '../shared/protocol';
@@ -31,6 +33,14 @@ interface ConnectionAttachment {
 type ElementRow = Record<string, SqlStorageValue> & { data: string };
 type OperationRow = Record<string, SqlStorageValue> & { server_seq: number; payload: string };
 type MetaRow = Record<string, SqlStorageValue> & { value: string };
+type ChatRow = Record<string, SqlStorageValue> & {
+	message_id: string;
+	participant_id: string;
+	display_name: string;
+	color: string;
+	body: string;
+	created_at: number;
+};
 
 const AUTH_TIMEOUT_MS = 5_000;
 const DAY_MS = 86_400_000;
@@ -86,6 +96,15 @@ export class BoardDurableObject extends DurableObject<Env> {
         created_at INTEGER NOT NULL
       );
       CREATE INDEX IF NOT EXISTS operations_created_at ON operations(created_at);
+      CREATE TABLE IF NOT EXISTS chat (
+        rowid_seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        message_id TEXT NOT NULL UNIQUE,
+        participant_id TEXT NOT NULL,
+        display_name TEXT NOT NULL,
+        color TEXT NOT NULL,
+        body TEXT NOT NULL,
+        created_at INTEGER NOT NULL
+      );
     `);
 	}
 
@@ -97,6 +116,8 @@ export class BoardDurableObject extends DurableObject<Env> {
 
 	async fetch(request: Request): Promise<Response> {
 		if (!this.hasSchema() || !this.getMeta('created_at')) return new Response('Board expired or not found', { status: 410 });
+		// Idempotent: brings boards created before a table was introduced up to the current schema.
+		this.ensureSchema();
 		if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected WebSocket', { status: 426 });
 		if (this.ctx.getWebSockets().length >= MAX_CONNECTIONS) return new Response('Board is at capacity', { status: 429 });
 
@@ -161,9 +182,54 @@ export class BoardDurableObject extends DurableObject<Env> {
 				},
 				webSocket,
 			);
+		} else if (message.type === 'chat') {
+			if (attachment.capability !== 'edit') {
+				this.send(webSocket, { type: 'error', reason: 'This link is view-only, so it cannot post chat messages.' });
+				return;
+			}
+			this.appendChat(attachment, message.body);
 		} else if (message.type === 'ping') {
 			this.send(webSocket, { type: 'pong' });
 		}
+	}
+
+	/** Persists a chat message before relaying it, then prunes older history. */
+	private appendChat(attachment: ConnectionAttachment, body: string): void {
+		const message: ChatMessage = {
+			id: crypto.randomUUID(),
+			participantId: attachment.participantId ?? '',
+			displayName: attachment.displayName ?? 'Anonymous',
+			color: attachment.color ?? '#0A95FF',
+			body,
+			createdAt: Date.now(),
+		};
+		this.ctx.storage.transactionSync(() => {
+			this.ctx.storage.sql.exec(
+				'INSERT INTO chat (message_id, participant_id, display_name, color, body, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+				message.id,
+				message.participantId,
+				message.displayName,
+				message.color,
+				message.body,
+				message.createdAt,
+			);
+			this.ctx.storage.sql.exec('DELETE FROM chat WHERE rowid_seq <= (SELECT MAX(rowid_seq) - ? FROM chat)', CHAT_HISTORY_LIMIT);
+		});
+		this.broadcast({ type: 'chat', message });
+	}
+
+	private chatHistory(): ChatMessage[] {
+		return this.ctx.storage.sql
+			.exec<ChatRow>('SELECT message_id, participant_id, display_name, color, body, created_at FROM chat ORDER BY rowid_seq')
+			.toArray()
+			.map((row) => ({
+				id: row.message_id,
+				participantId: row.participant_id,
+				displayName: row.display_name,
+				color: row.color,
+				body: row.body,
+				createdAt: row.created_at,
+			}));
 	}
 
 	async webSocketClose(webSocket: WebSocket, code: number, reason: string): Promise<void> {
@@ -243,6 +309,7 @@ export class BoardDurableObject extends DurableObject<Env> {
 			serverSeq,
 			metadata: this.metadata(),
 			participants: this.participants(webSocket),
+			chat: this.chatHistory(),
 		};
 		if (canResume) {
 			const operations = this.ctx.storage.sql

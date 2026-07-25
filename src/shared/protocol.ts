@@ -22,13 +22,26 @@ export const presenceMessageSchema = z.object({
 	selectedIds: z.array(z.string().uuid()).max(100),
 	tool: z.string().max(30),
 });
+export const chatMessageSchema = z.object({
+	type: z.literal('chat'),
+	body: z.string().trim().min(1).max(500),
+});
 export const clientMessageSchema = z.discriminatedUnion('type', [
 	helloMessageSchema,
 	clientOperationSchema,
 	presenceMessageSchema,
+	chatMessageSchema,
 	z.object({ type: z.literal('ping') }),
 ]);
 export type ClientMessage = z.infer<typeof clientMessageSchema>;
+export interface ChatMessage {
+	id: string;
+	participantId: string;
+	displayName: string;
+	color: string;
+	body: string;
+	createdAt: number;
+}
 export interface Presence {
 	participantId: string;
 	displayName: string;
@@ -48,10 +61,12 @@ export type ServerMessage =
 			elements?: BoardElement[];
 			operations?: Array<{ serverSeq: number; operation: BoardOperation }>;
 			participants: Presence[];
+			chat: ChatMessage[];
 	  }
 	| { type: 'operation-applied'; opId: string; serverSeq: number; operation: BoardOperation }
 	| { type: 'operation-rejected'; opId?: string; reason: string }
 	| ({ type: 'presence' } & Presence)
+	| { type: 'chat'; message: ChatMessage }
 	| { type: 'participant-left'; participantId: string }
 	| { type: 'pong' }
 	| { type: 'board-expired' }
@@ -61,3 +76,5 @@ export const MAX_MESSAGE_BYTES = 64 * 1024;
 export const MAX_ELEMENTS = 2_000;
 export const MAX_CONNECTIONS = 30;
 export const OPLOG_LIMIT = 2_000;
+/** Retained chat history per board; older messages are pruned as new ones arrive. */
+export const CHAT_HISTORY_LIMIT = 200;

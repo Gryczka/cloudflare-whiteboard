@@ -30,6 +30,7 @@ The editor itself is built with React and SVG. It includes drawing, shapes, text
 - Bound connectors stay attached when source or destination shapes move or resize, with configurable start and end arrowheads
 - Pan, zoom, touch controls, fit-to-board, and responsive mobile toolbars
 - Live collaborator cursors, selections, names, and connection status
+- Per-board chat with server-ordered history that survives reload and reconnect; view-only links can read but not post
 - Per-user undo and redo
 - PNG, standalone SVG, and versioned JSON export; validated JSON import
 - Thirty-day sliding expiration driven by a Durable Object alarm
@@ -70,15 +71,16 @@ See [docs/protocol.md](docs/protocol.md) for message details and [docs/threat-mo
 
 ## Data model
 
-Each Durable Object creates three SQLite tables:
+Each Durable Object creates four SQLite tables:
 
 | Table        | Purpose                                                        |
 | ------------ | -------------------------------------------------------------- |
 | `meta`       | Capability hashes, title, sequence, timestamps, and expiration |
 | `elements`   | Current materialized vector elements and tombstones            |
 | `operations` | Bounded reconnect and idempotency tail                         |
+| `chat`       | Bounded per-board conversation history                         |
 
-The `elements` table is the snapshot. The operation tail is pruned after 2,000 entries, so storage does not grow with the full editing history.
+The `elements` table is the snapshot. The operation tail is pruned after 2,000 entries and chat after 200 messages, so storage does not grow with the full editing history. Schema creation is idempotent, so boards created before a table existed gain it on their next connection.
 
 ## Security and privacy
 
@@ -156,6 +158,8 @@ Public-demo limits are defined in `src/shared/protocol.ts` and `wrangler.jsonc`:
 | Application message     |              64 KiB |
 | Messages per connection |       40 per second |
 | Retained operations     |               2,000 |
+| Chat message length     |      500 characters |
+| Retained chat messages  |                 200 |
 | Inactivity retention    |             30 days |
 
 ## Project structure

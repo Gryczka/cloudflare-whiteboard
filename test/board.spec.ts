@@ -2,6 +2,7 @@ import { env, exports } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import { applyOperation, boardElementSchema, DEFAULT_STYLE, type BoardElement } from '../src/shared/board';
 import { hashToken, randomToken, safeEqual } from '../src/shared/crypto';
+import { chatMessageSchema, type ServerMessage } from '../src/shared/protocol';
 import { centerPlacement, createObjectAt, DEFAULT_SIZES } from '../src/client/editor/shape-defaults';
 import { textBoxHeight, wrapTextLines } from '../src/client/editor/text-layout';
 
@@ -153,5 +154,98 @@ describe('Worker and Durable Object integration', () => {
 			1_000,
 		);
 		expect(result.expiresAt).toBeLessThanOrEqual(Date.now() + 90 * 86_400_000);
+	});
+});
+
+const EDIT_TOKEN = 'edit-token-that-is-long-enough';
+const VIEW_TOKEN = 'view-token-that-is-long-enough';
+
+type Board = ReturnType<typeof env.BOARDS.getByName>;
+
+async function newBoard(): Promise<Board> {
+	const board = env.BOARDS.getByName(`chat-${crypto.randomUUID()}`);
+	await board.initialize(await hashToken(EDIT_TOKEN), await hashToken(VIEW_TOKEN), 30);
+	return board;
+}
+
+async function waitForMessage<T extends ServerMessage['type']>(inbox: ServerMessage[], type: T, timeout = 2_000) {
+	const deadline = Date.now() + timeout;
+	while (Date.now() < deadline) {
+		const found = inbox.find((message) => message.type === type);
+		if (found) return found as Extract<ServerMessage, { type: T }>;
+		await new Promise((resolve) => setTimeout(resolve, 10));
+	}
+	throw new Error(`Timed out waiting for a ${type} message`);
+}
+
+async function join(board: Board, token: string) {
+	const response = await board.fetch(new Request('https://example.com/api/boards/board/ws', { headers: { Upgrade: 'websocket' } }));
+	const socket = response.webSocket;
+	if (!socket) throw new Error('The Durable Object did not return a WebSocket');
+	socket.accept();
+	const inbox: ServerMessage[] = [];
+	socket.addEventListener('message', (event) => {
+		inbox.push(JSON.parse(String(event.data)) as ServerMessage);
+	});
+	socket.send(
+		JSON.stringify({
+			type: 'hello',
+			token,
+			participantId: crypto.randomUUID(),
+			displayName: 'Tester',
+			color: '#0A95FF',
+			sinceSeq: 0,
+		}),
+	);
+	const welcome = await waitForMessage(inbox, 'welcome');
+	return { socket, inbox, welcome };
+}
+
+describe('board chat', () => {
+	it('rejects empty and oversized message bodies', () => {
+		expect(chatMessageSchema.safeParse({ type: 'chat', body: '   ' }).success).toBe(false);
+		expect(chatMessageSchema.safeParse({ type: 'chat', body: 'x'.repeat(501) }).success).toBe(false);
+		expect(chatMessageSchema.safeParse({ type: 'chat', body: '  hello  ' }).data?.body).toBe('hello');
+	});
+
+	it('broadcasts a message to other participants and persists it for later joiners', async () => {
+		const board = await newBoard();
+		const author = await join(board, EDIT_TOKEN);
+		const listener = await join(board, EDIT_TOKEN);
+		expect(author.welcome.chat).toEqual([]);
+
+		author.socket.send(JSON.stringify({ type: 'chat', body: 'Ship it' }));
+		const relayed = await waitForMessage(listener.inbox, 'chat');
+		expect(relayed.message.body).toBe('Ship it');
+		expect(relayed.message.displayName).toBe('Tester');
+
+		// A participant joining afterwards receives the stored history.
+		const latecomer = await join(board, EDIT_TOKEN);
+		expect(latecomer.welcome.chat.map((message) => message.body)).toEqual(['Ship it']);
+	});
+
+	it('refuses chat from view-only capabilities', async () => {
+		const board = await newBoard();
+		const viewer = await join(board, VIEW_TOKEN);
+		expect(viewer.welcome.permission).toBe('view');
+
+		viewer.socket.send(JSON.stringify({ type: 'chat', body: 'Can I post?' }));
+		const error = await waitForMessage(viewer.inbox, 'error');
+		expect(error.reason).toContain('view-only');
+
+		const observer = await join(board, EDIT_TOKEN);
+		expect(observer.welcome.chat).toEqual([]);
+	});
+
+	it('does not extend board expiry when chatting', async () => {
+		const board = await newBoard();
+		const author = await join(board, EDIT_TOKEN);
+		const before = author.welcome.metadata.expiresAt;
+
+		author.socket.send(JSON.stringify({ type: 'chat', body: 'Just talking' }));
+		await waitForMessage(author.inbox, 'chat');
+
+		const rejoined = await join(board, EDIT_TOKEN);
+		expect(rejoined.welcome.metadata.expiresAt).toBe(before);
 	});
 });

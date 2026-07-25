@@ -1,7 +1,7 @@
 /** React integration for authentication, reconnect, delta replay, and presence. */
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { applyOperation, type BoardElement, type BoardMetadata, type BoardOperation } from '../../shared/board';
-import type { Presence, ServerMessage } from '../../shared/protocol';
+import type { ChatMessage, Presence, ServerMessage } from '../../shared/protocol';
 
 type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'offline' | 'invalid';
 
@@ -28,6 +28,7 @@ export function useBoard(boardId: string, token: string) {
 	const [permission, setPermission] = useState<'edit' | 'view'>('view');
 	const [status, setStatus] = useState<ConnectionStatus>('connecting');
 	const [participants, setParticipants] = useState<Map<string, Presence>>(new Map());
+	const [chat, setChat] = useState<ChatMessage[]>([]);
 	const socketRef = useRef<WebSocket | null>(null);
 	const sequenceRef = useRef(0);
 	const reconnectRef = useRef(0);
@@ -68,6 +69,8 @@ export function useBoard(boardId: string, token: string) {
 						setElements((current) => message.operations!.reduce((state, item) => applyOperation(state, item.operation), current));
 					}
 					setParticipants(new Map(message.participants.map((person) => [person.participantId, person])));
+					// Server history is canonical, so a reconnect cannot duplicate or lose messages.
+					setChat(message.chat);
 					reconnectRef.current = 0;
 					setStatus('connected');
 				} else if (message.type === 'operation-applied') {
@@ -82,6 +85,10 @@ export function useBoard(boardId: string, token: string) {
 				} else if (message.type === 'operation-rejected') {
 					// Reconnect to discard optimistic state and load the canonical board.
 					socket.close(1012, 'Resync after rejected operation');
+				} else if (message.type === 'chat') {
+					setChat((current) =>
+						current.some((item) => item.id === message.message.id) ? current : [...current, message.message].slice(-200),
+					);
 				} else if (message.type === 'presence') {
 					setParticipants((current) => new Map(current).set(message.participantId, message));
 				} else if (message.type === 'participant-left') {
@@ -131,14 +138,26 @@ export function useBoard(boardId: string, token: string) {
 		socketRef.current.send(JSON.stringify({ type: 'presence', ...presence }));
 	}, []);
 
+	const sendChat = useCallback(
+		(body: string) => {
+			const trimmed = body.trim().slice(0, 500);
+			if (!trimmed || permission !== 'edit' || socketRef.current?.readyState !== WebSocket.OPEN) return false;
+			socketRef.current.send(JSON.stringify({ type: 'chat', body: trimmed }));
+			return true;
+		},
+		[permission],
+	);
+
 	return {
 		elements,
 		metadata,
 		permission,
 		status,
 		participants,
+		chat,
 		identity: userIdentity,
 		commit,
 		sendPresence,
+		sendChat,
 	};
 }

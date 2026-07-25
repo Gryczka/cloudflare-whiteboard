@@ -2,7 +2,7 @@
 
 ## Protected assets
 
-- Board content
+- Board content and chat history
 - Edit and view capabilities
 - Durable Object storage and compute budget
 - Availability for legitimate collaborators
@@ -13,17 +13,18 @@ Browsers are untrusted. All geometry, text, permissions, message sizes, and rate
 
 ## Primary threats
 
-| Threat                  | Mitigation                                                                                               |
-| ----------------------- | -------------------------------------------------------------------------------------------------------- |
-| Board enumeration       | Random 128-bit board IDs plus independent 192-bit capabilities                                           |
-| Token leakage           | URL fragments, no-referrer policy, no token logging, TLS WebSockets                                      |
-| Viewer mutation         | Server-side capability check on every operation                                                          |
-| Replay                  | Idempotent operation UUIDs                                                                               |
-| Stored XSS              | Structured element schema, React text nodes, no raw HTML or foreign SVG, CSP                             |
-| Resource exhaustion     | Creation, connection, message, operation, element, and point limits; five-second authentication deadline |
-| Broadcast amplification | Per-connection message rate limit and bounded room size                                                  |
-| Infinite retention      | Edit-only 30-day sliding TTL and alarm-driven deletion                                                   |
-| Sensitive data in logs  | Event metadata only; no operations, text, or full identifiers                                            |
+| Threat                  | Mitigation                                                                                                                         |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| Board enumeration       | Random 128-bit board IDs plus independent 192-bit capabilities                                                                     |
+| Token leakage           | URL fragments, no-referrer policy, no token logging, TLS WebSockets                                                                |
+| Viewer mutation         | Server-side capability check on every operation                                                                                    |
+| Replay                  | Idempotent operation UUIDs                                                                                                         |
+| Stored XSS              | Structured element schema, React text nodes, no raw HTML or foreign SVG, CSP                                                       |
+| Chat abuse              | Edit-only posting, 500-character bodies, per-connection message rate limit, 200-message retention, server-assigned author identity |
+| Resource exhaustion     | Creation, connection, message, operation, element, and point limits; five-second authentication deadline                           |
+| Broadcast amplification | Per-connection message rate limit and bounded room size                                                                            |
+| Infinite retention      | Edit-only 30-day sliding TTL and alarm-driven deletion                                                                             |
+| Sensitive data in logs  | Event metadata only; no operations, text, or full identifiers                                                                      |
 
 ## Accepted risks
 

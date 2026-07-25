@@ -10,6 +10,7 @@ import {
 	Group,
 	Lock,
 	Menu,
+	MessageSquare,
 	Redo2,
 	Share2,
 	Trash2,
@@ -37,6 +38,7 @@ import { REPO_URL } from '../../shared/constants';
 import type { Presence } from '../../shared/protocol';
 import { Logo } from '../components/Logo';
 import { useBoard } from '../realtime/useBoard';
+import { ChatPanel } from './ChatPanel';
 import { ElementRenderer } from './ElementRenderer';
 import { MODE_TOOLS, OBJECT_TILES, type ModeTool } from './palette-items';
 import { centerPlacement, createObjectAt, type ObjectKind } from './shape-defaults';
@@ -70,6 +72,8 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 	const [viewport, setViewport] = useState<Viewport>({ x: 0, y: 0, zoom: 1 });
 	const [drafts, setDrafts] = useState<Map<string, BoardElement>>(new Map());
 	const [shareOpen, setShareOpen] = useState(false);
+	const [chatOpen, setChatOpen] = useState(false);
+	const [chatSeen, setChatSeen] = useState(0);
 	const [exportOpen, setExportOpen] = useState(false);
 	const [inspectorOpen, setInspectorOpen] = useState(false);
 	const [style, setStyle] = useState<ElementStyle>(DEFAULT_STYLE);
@@ -105,6 +109,13 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 		if (!editingId) return;
 		textEditorRef.current?.focus();
 	}, [editingId]);
+
+	// An open panel is always caught up; closing it marks everything read.
+	const unreadChat = chatOpen ? 0 : Math.max(0, board.chat.length - chatSeen);
+	function toggleChat(open: boolean) {
+		if (!open) setChatSeen(board.chat.length);
+		setChatOpen(open);
+	}
 
 	const inverseFor = useCallback(
 		(operation: BoardOperation): BoardOperation | null => {
@@ -676,6 +687,16 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 						}}
 					/>
 				)}
+				<button
+					className={`button small ghost chat-toggle ${chatOpen ? 'active' : ''}`}
+					onClick={() => toggleChat(!chatOpen)}
+					aria-expanded={chatOpen}
+					aria-label={unreadChat ? `Chat, ${unreadChat} unread` : 'Chat'}
+				>
+					<MessageSquare size={16} />
+					<span>Chat</span>
+					{unreadChat > 0 && <em className="chat-badge">{unreadChat > 9 ? '9+' : unreadChat}</em>}
+				</button>
 				<a className="button small ghost source-link" href={REPO_URL} target="_blank" rel="noreferrer">
 					<Code2 size={16} />
 					<span>Source</span>
@@ -836,6 +857,15 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 					</div>
 					{board.permission === 'edit' && !renderedElements.length && (
 						<p className="canvas-hint">Click a shape above to drop it here, or drag one onto the board.</p>
+					)}
+					{chatOpen && (
+						<ChatPanel
+							messages={board.chat}
+							participantId={board.identity.id}
+							canPost={board.permission === 'edit'}
+							onSend={board.sendChat}
+							onClose={() => toggleChat(false)}
+						/>
 					)}
 					{board.permission === 'view' && <span className="view-badge">View only</span>}
 					{board.status !== 'connected' && (
