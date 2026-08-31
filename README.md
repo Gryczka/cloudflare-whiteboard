@@ -1,5 +1,6 @@
 # Cloudflare Whiteboard
 
+[![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Gryczka/cloudflare-whiteboard)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)](https://developers.cloudflare.com/workers/)
 [![Durable Objects](https://img.shields.io/badge/Durable_Objects-SQLite-0A95FF)](https://developers.cloudflare.com/durable-objects/)
 [![React](https://img.shields.io/badge/React-19-149ECA?logo=react)](https://react.dev/)
