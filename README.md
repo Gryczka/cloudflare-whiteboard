@@ -40,6 +40,8 @@ The editor itself is built with React and SVG. It includes drawing, shapes, text
 
 ## Architecture
 
+![Cloudflare Whiteboard architecture](docs/architecture-tile-dark.png)
+
 ```mermaid
 flowchart LR
     B[React + SVG browsers] -->|Create board and static assets| W[Cloudflare Worker]
