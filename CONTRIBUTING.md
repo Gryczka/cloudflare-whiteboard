@@ -9,7 +9,7 @@ Thanks for improving Cloudflare Whiteboard. This is a reference project, so focu
 3. Run `npm install` and `npm run dev`.
 4. Keep changes small and add a targeted test when practical.
 
-No environment variables are required for local development. Wrangler simulates Durable Objects and rate limiting locally.
+No environment variables are required for local development. Wrangler simulates both SQLite-backed Durable Object classes locally.
 
 ## Code style
 

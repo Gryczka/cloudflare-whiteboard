@@ -1,8 +1,9 @@
 /** Worker entrypoint for board creation, WebSocket routing, and static assets. */
 import { hashToken, randomToken } from './shared/crypto';
 import { BoardDurableObject } from './server/board-do';
+import { BoardCreationRateLimiter } from './server/board-creation-rate-limiter';
 
-export { BoardDurableObject };
+export { BoardCreationRateLimiter, BoardDurableObject };
 
 function json(data: unknown, init?: ResponseInit): Response {
 	return Response.json(data, {
@@ -30,9 +31,10 @@ export default {
 
 		try {
 			if (request.method === 'POST' && url.pathname === '/api/boards') {
-				const ip = request.headers.get('CF-Connecting-IP') ?? 'local';
-				const rate = await env.BOARD_CREATION_LIMIT.limit({ key: ip });
-				if (!rate.success) return json({ error: 'Too many boards created. Try again in a minute.' }, { status: 429 });
+				const ip = request.headers.get('CF-Connecting-IP');
+				if (!ip) throw new Error('Missing platform client address');
+				const limiter = env.BOARD_CREATION_RATE_LIMITER.getByName(await hashToken(ip));
+				if (!(await limiter.reserve())) return json({ error: 'Too many boards created. Try again in a minute.' }, { status: 429 });
 
 				const boardId = randomToken(16);
 				const editToken = randomToken(24);

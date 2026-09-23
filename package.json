@@ -12,6 +12,7 @@
 		"build": "npm run lint && npm run typecheck && vite build",
 		"deploy": "npm run build && wrangler deploy",
 		"deploy:dry-run": "npm run build && wrangler deploy --dry-run",
+		"temporary:deploy": "npm run check && wrangler deploy --temporary",
 		"preview": "npm run build && vite preview",
 		"lint": "eslint .",
 		"lint:fix": "eslint . --fix && prettier --write .",
@@ -42,7 +43,7 @@
 		"typescript-eslint": "^8.65.0",
 		"vite": "^7.3.6",
 		"vitest": "^4.1.10",
-		"wrangler": "^4.113.0"
+		"wrangler": "4.134.0"
 	},
 	"dependencies": {
 		"lucide-react": "^1.26.0",

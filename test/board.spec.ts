@@ -1,5 +1,7 @@
 import { env, exports } from 'cloudflare:workers';
+import { runDurableObjectAlarm, runInDurableObject } from 'cloudflare:test';
 import { describe, expect, it } from 'vitest';
+import worker from '../src/index';
 import { applyOperation, boardElementSchema, DEFAULT_STYLE, type BoardElement } from '../src/shared/board';
 import { hashToken, randomToken, safeEqual } from '../src/shared/crypto';
 import { chatMessageSchema, type ServerMessage } from '../src/shared/protocol';
@@ -114,19 +116,126 @@ describe('board state', () => {
 	});
 });
 
+const LIMITER_WINDOW_START = 1_800_000_000_000;
+
+describe('board creation rate limiting', () => {
+	it('allows reservations one through five and rejects the sixth', async () => {
+		const limiter = env.BOARD_CREATION_RATE_LIMITER.getByName('five-reservations');
+		const reservations: boolean[] = [];
+		for (let request = 0; request < 6; request += 1) {
+			reservations.push(await limiter.reserve(LIMITER_WINDOW_START));
+		}
+		expect(reservations).toEqual([true, true, true, true, true, false]);
+	});
+
+	it('resets reservations at a Unix-aligned window boundary', async () => {
+		const limiter = env.BOARD_CREATION_RATE_LIMITER.getByName('fixed-window-reset');
+		for (let reservation = 0; reservation < 5; reservation += 1) {
+			expect(await limiter.reserve(LIMITER_WINDOW_START + 59_999)).toBe(true);
+		}
+		expect(await limiter.reserve(LIMITER_WINDOW_START + 59_999)).toBe(false);
+		expect(await limiter.reserve(LIMITER_WINDOW_START + 60_000)).toBe(true);
+	});
+
+	it('atomically caps concurrent reservations', async () => {
+		const limiter = env.BOARD_CREATION_RATE_LIMITER.getByName('concurrent-reservations');
+		const reservations = await Promise.all(Array.from({ length: 6 }, () => limiter.reserve(LIMITER_WINDOW_START)));
+		expect(reservations.filter(Boolean)).toHaveLength(5);
+		expect(reservations.filter((accepted) => !accepted)).toHaveLength(1);
+	});
+
+	it('keeps distinct client addresses independent', async () => {
+		const firstName = await hashToken('192.0.2.60');
+		const secondName = await hashToken('192.0.2.61');
+		expect(firstName).not.toBe(secondName);
+		const first = env.BOARD_CREATION_RATE_LIMITER.getByName(firstName);
+		const second = env.BOARD_CREATION_RATE_LIMITER.getByName(secondName);
+
+		for (let reservation = 0; reservation < 5; reservation += 1) {
+			expect(await first.reserve(LIMITER_WINDOW_START)).toBe(true);
+		}
+		expect(await first.reserve(LIMITER_WINDOW_START)).toBe(false);
+		expect(await second.reserve(LIMITER_WINDOW_START)).toBe(true);
+	});
+
+	it('deletes inactive storage and recreates its schema on the next reservation', async () => {
+		const limiter = env.BOARD_CREATION_RATE_LIMITER.getByName('alarm-cleanup');
+		for (let reservation = 0; reservation < 5; reservation += 1) {
+			expect(await limiter.reserve(LIMITER_WINDOW_START)).toBe(true);
+		}
+		expect(await limiter.reserve(LIMITER_WINDOW_START)).toBe(false);
+
+		await runInDurableObject(limiter, async (_instance, state) => {
+			state.storage.sql.exec('UPDATE reservation_window SET cleanup_at = 0 WHERE singleton = 1');
+			await state.storage.setAlarm(Date.now() + 60_000);
+		});
+		expect(await runDurableObjectAlarm(limiter)).toBe(true);
+		expect(await limiter.reserve(LIMITER_WINDOW_START)).toBe(true);
+	});
+});
+
 describe('Worker and Durable Object integration', () => {
+	function boardRequest(ip?: string, forwardedFor?: string): Request {
+		const headers = new Headers();
+		if (ip) headers.set('CF-Connecting-IP', ip);
+		if (forwardedFor) headers.set('X-Forwarded-For', forwardedFor);
+		return new Request('https://example.com/api/boards', { method: 'POST', headers });
+	}
+
+	function withLimiter(reserve: () => Promise<boolean>, objectNames?: string[]): Env {
+		return new Proxy(env, {
+			get(target, property, receiver) {
+				if (property === 'BOARD_CREATION_RATE_LIMITER') {
+					return {
+						getByName(name: string) {
+							objectNames?.push(name);
+							return { reserve };
+						},
+					};
+				}
+				return Reflect.get(target, property, receiver);
+			},
+		});
+	}
+
 	it('creates a board with distinct capability tokens', async () => {
-		const response = await exports.default.fetch(
-			new Request('https://example.com/api/boards', {
-				method: 'POST',
-				headers: { 'CF-Connecting-IP': '192.0.2.10' },
-			}),
-		);
+		const response = await exports.default.fetch(boardRequest('192.0.2.10'));
 		expect(response.status).toBe(201);
 		const body = (await response.json()) as { boardId: string; editToken: string; viewToken: string; expiresAt: number };
 		expect(body.boardId.length).toBeGreaterThan(20);
 		expect(body.editToken).not.toBe(body.viewToken);
 		expect(body.expiresAt).toBeGreaterThan(Date.now());
+	});
+
+	it('returns 429 when the limiter denies a reservation', async () => {
+		const response = await worker.fetch(
+			boardRequest('192.0.2.20'),
+			withLimiter(() => Promise.resolve(false)),
+		);
+		expect(response.status).toBe(429);
+	});
+
+	it('fails closed when the platform client address is missing', async () => {
+		const response = await exports.default.fetch(boardRequest(undefined, '198.51.100.1'));
+		expect(response.status).toBe(500);
+	});
+
+	it('ignores spoofable forwarding headers', async () => {
+		const objectNames: string[] = [];
+		const recordingEnv = withLimiter(() => Promise.resolve(true), objectNames);
+		const first = await worker.fetch(boardRequest('192.0.2.30', '198.51.100.1'), recordingEnv);
+		const second = await worker.fetch(boardRequest('192.0.2.30', '198.51.100.2'), recordingEnv);
+		expect([first.status, second.status]).toEqual([201, 201]);
+		const expectedName = await hashToken('192.0.2.30');
+		expect(objectNames).toEqual([expectedName, expectedName]);
+	});
+
+	it('fails closed when the limiter RPC or storage operation rejects', async () => {
+		const response = await worker.fetch(
+			boardRequest('192.0.2.40'),
+			withLimiter(() => Promise.reject(new Error('Limiter reservation failed'))),
+		);
+		expect(response.status).toBe(500);
 	});
 
 	it('initializes each Durable Object only once', async () => {

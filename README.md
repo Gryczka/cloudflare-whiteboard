@@ -1,5 +1,12 @@
 # Cloudflare Whiteboard
 
+> [!IMPORTANT]
+> **Temporary-account compatibility variant.** This branch replaces only the native board-creation Rate Limiting binding with a SQLite Durable Object so it can be deployed with `npm run temporary:deploy`.
+>
+> `--temporary` is for unauthenticated Wrangler sessions only. Active OAuth, API token, or global API key credentials cause Wrangler to exit with an error. Complete the account claim flow within **60 minutes**; opening the claim URL is not enough. If the claim is not completed, Cloudflare deletes the temporary account and all of its resources. See [Claim deployments](https://developers.cloudflare.com/workers/platform/claim-deployments/).
+>
+> The full/default `main` branch is unchanged and continues to use the native Rate Limiting binding.
+
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Gryczka/cloudflare-whiteboard)
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)](https://developers.cloudflare.com/workers/)
 [![Durable Objects](https://img.shields.io/badge/Durable_Objects-SQLite-0A95FF)](https://developers.cloudflare.com/durable-objects/)
@@ -46,6 +53,8 @@ The editor itself is built with React and SVG. It includes drawing, shapes, text
 flowchart LR
     B[React + SVG browsers] -->|Create board and static assets| W[Cloudflare Worker]
     B <-->|Hibernatable WebSocket| W
+    W -->|SHA-256 of platform client IP| R[Creation limiter Durable Object]
+    R --> L[(Fixed-window SQLite counter)]
     W -->|getByName boardId| D[Board Durable Object]
     D --> S[(SQLite materialized state)]
     D --> O[(Bounded operation tail)]
@@ -54,7 +63,7 @@ flowchart LR
     D -->|Transient presence| B
 ```
 
-The Worker serves the Vite assets, creates capability tokens, rate-limits board creation, and routes each WebSocket to `env.BOARDS.getByName(boardId)`. The board's Durable Object validates permissions, assigns a monotonic sequence to each mutation, writes canonical state to its embedded SQLite database, and broadcasts only after persistence succeeds.
+The Worker serves the Vite assets, creates capability tokens, rate-limits board creation, and routes each WebSocket to `env.BOARDS.getByName(boardId)`. For creation requests, it hashes the platform-provided `CF-Connecting-IP` with SHA-256 and routes one fixed-window limiter Durable Object per hash. The application does not store or log the raw address, but the unsalted digest is a deterministic pseudonymous identifier, not anonymization. The board's Durable Object validates permissions, assigns a monotonic sequence to each mutation, writes canonical state to its embedded SQLite database, and broadcasts only after persistence succeeds.
 
 Cursor traffic never touches storage. Clients send transient presence at a bounded rate while committed pointer-up changes use the durable operation path.
 
@@ -74,7 +83,7 @@ See [docs/protocol.md](docs/protocol.md) for message details and [docs/threat-mo
 
 ## Data model
 
-Each Durable Object creates four SQLite tables:
+Each board Durable Object creates four SQLite tables:
 
 | Table        | Purpose                                                        |
 | ------------ | -------------------------------------------------------------- |
@@ -85,12 +94,17 @@ Each Durable Object creates four SQLite tables:
 
 The `elements` table is the snapshot. The operation tail is pruned after 2,000 entries and chat after 200 messages, so storage does not grow with the full editing history. Schema creation is idempotent, so boards created before a table existed gain it on their next connection.
 
+Each board-creation limiter Durable Object stores one SQLite row containing the current Unix-aligned minute, its reservation count, and a cleanup deadline. An alarm deletes the object's storage ten minutes after its last successful reservation.
+
 ## Security and privacy
 
 - Tokens contain 192 random bits and are stored only as SHA-256 hashes on the server. The creator's browser temporarily keeps plaintext share links in session storage.
 - Tokens use URL fragments, which browsers do not send in HTTP requests or referrers.
 - A token is transmitted in the first encrypted WebSocket message and checked inside the Durable Object.
 - View-only permissions are enforced on every mutation server-side.
+- Board creation requires Cloudflare-proxied ingress so the platform supplies `CF-Connecting-IP`. Spoofable forwarding headers are ignored; a missing platform header fails closed with HTTP 500.
+- Limiter object names use unsalted SHA-256 digests of `CF-Connecting-IP`. Raw addresses are not persisted or logged by the application, but IPv4 addresses can be recovered by enumerating the small address space, so the digest must not be treated as anonymous data.
+- Users behind the same public IP share the five-per-minute creation allowance.
 - Content and tokens are excluded from structured logs.
 - User text is rendered as React text nodes; raw HTML, foreign SVG, and arbitrary uploads are unsupported.
 - Responses set a strict CSP, `no-referrer`, framing denial, and restricted browser permissions.
@@ -101,8 +115,8 @@ Anyone possessing a capability link can use it. Version one does not include acc
 
 - Node.js 22 or newer
 - npm
-- A Cloudflare account for deployment
-- Wrangler authentication through `npx wrangler login`
+- A Cloudflare account and Wrangler authentication through `npx wrangler login` for normal deployments
+- No active Wrangler credentials when using the temporary-preview command
 
 Durable Objects are available on Workers Free and Paid plans. Check the current [Durable Objects pricing](https://developers.cloudflare.com/durable-objects/platform/pricing/) before operating a public deployment.
 
@@ -118,7 +132,7 @@ npm run dev
 
 Open the local URL shown by Vite. Durable Object SQLite state is simulated locally and persisted under `.wrangler/`.
 
-No secrets are required for the default project. The Rate Limiting binding is simulated during local development.
+No secrets are required for the project. Both SQLite-backed Durable Object classes are simulated during local development.
 
 ## Testing
 
@@ -129,7 +143,7 @@ npm test
 npm run build
 ```
 
-Tests run inside workerd through `@cloudflare/vitest-pool-workers`, covering reducers, cryptographic capabilities, Worker board creation, and Durable Object idempotent initialization.
+Tests run inside workerd through `@cloudflare/vitest-pool-workers`, covering reducers, cryptographic capabilities, Worker board creation, fixed-window limiting and cleanup, and Durable Object idempotent initialization.
 
 ## Deployment
 
@@ -147,23 +161,25 @@ npm run deploy
 
 Wrangler uses the account associated with your current login. The repository intentionally does not commit an account ID or tenant-specific resource IDs.
 
-The deployment creates the SQLite-backed Durable Object namespace from migration `v1`. Never edit an existing migration after deployment; append a new migration tag for future class changes.
+The deployment creates the board namespace from migration `v1` and the board-creation limiter namespace from migration `v2`. Never edit an existing migration after deployment; append a new migration tag for future class changes.
+
+For an unauthenticated temporary preview, first remove or deactivate Wrangler OAuth, API token, and global API key credentials, then run `npm run temporary:deploy`. Active credentials cause `--temporary` to fail. Wrangler prints the preview and claim URLs. The claim must be completed within 60 minutes or Cloudflare deletes the temporary account and its resources. See [Claim deployments](https://developers.cloudflare.com/workers/platform/claim-deployments/) for the full lifecycle.
 
 ## Configuration
 
-Public-demo limits are defined in `src/shared/protocol.ts` and `wrangler.jsonc`:
+Public-demo limits are defined in `src/shared/protocol.ts`, `src/server/board-creation-rate-limiter.ts`, and `wrangler.jsonc`:
 
-| Limit                   |             Default |
-| ----------------------- | ------------------: |
-| Board creation          | 5 per IP per minute |
-| Connections per board   |                  30 |
-| Elements per board      |               2,000 |
-| Application message     |              64 KiB |
-| Messages per connection |       40 per second |
-| Retained operations     |               2,000 |
-| Chat message length     |      500 characters |
-| Retained chat messages  |                 200 |
-| Inactivity retention    |             30 days |
+| Limit                   |                                   Default |
+| ----------------------- | ----------------------------------------: |
+| Board creation          | 5 per platform IP per Unix-aligned minute |
+| Connections per board   |                                        30 |
+| Elements per board      |                                     2,000 |
+| Application message     |                                    64 KiB |
+| Messages per connection |                             40 per second |
+| Retained operations     |                                     2,000 |
+| Chat message length     |                            500 characters |
+| Retained chat messages  |                                       200 |
+| Inactivity retention    |                                   30 days |
 
 ## Project structure
 
@@ -175,7 +191,8 @@ src/
 │   ├── realtime/     # WebSocket lifecycle and reconciliation
 │   └── styles/       # Responsive Kumo design system
 ├── server/
-│   └── board-do.ts   # SQLite, capabilities, ordering, presence, expiry
+│   ├── board-creation-rate-limiter.ts # Fixed-window creation reservations
+│   └── board-do.ts                    # SQLite, capabilities, ordering, presence, expiry
 ├── shared/           # Board model, protocol, limits, crypto
 └── index.ts          # Worker entrypoint and request routing
 test/                 # Worker-runtime Vitest suite

@@ -14,15 +14,14 @@
 		"run_worker_first": ["/api/*"],
 	},
 	"durable_objects": {
-		"bindings": [{ "name": "BOARDS", "class_name": "BoardDurableObject" }],
+		"bindings": [
+			{ "name": "BOARDS", "class_name": "BoardDurableObject" },
+			{ "name": "BOARD_CREATION_RATE_LIMITER", "class_name": "BoardCreationRateLimiter" },
+		],
 	},
-	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["BoardDurableObject"] }],
-	"ratelimits": [
-		{
-			"name": "BOARD_CREATION_LIMIT",
-			"namespace_id": "1001",
-			"simple": { "limit": 5, "period": 60 },
-		},
+	"migrations": [
+		{ "tag": "v1", "new_sqlite_classes": ["BoardDurableObject"] },
+		{ "tag": "v2", "new_sqlite_classes": ["BoardCreationRateLimiter"] },
 	],
 	"vars": { "BOARD_TTL_DAYS": "30" },
 	"observability": {
