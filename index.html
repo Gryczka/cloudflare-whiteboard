@@ -6,10 +6,21 @@
 		<meta name="theme-color" content="#ffffff" />
 		<meta name="description" content="An anonymous, real-time collaborative whiteboard coordinated by Cloudflare Durable Objects." />
 		<meta name="referrer" content="no-referrer" />
+		<link rel="canonical" href="https://cloudflare-whiteboard.dwarven.workers.dev/" />
 		<title>Cloudflare Whiteboard</title>
 	</head>
 	<body>
 		<div id="root"></div>
+		<section aria-labelledby="about-whiteboard" style="max-width:60rem;margin:2rem auto;padding:1.5rem;font-family:system-ui">
+			<h2 id="about-whiteboard">A collaborative whiteboard on Cloudflare</h2>
+			<p>Draw, write, and collaborate in real time. A SQLite-backed Durable Object orders changes for each board; hibernatable WebSockets synchronize collaborators. Separate edit and view links control access, and inactive boards expire after 30 days by default.</p>
+			<p>This public introduction works without JavaScript. Creating a board is a deliberate action in the app above. Keep capability links private.</p>
+			<nav aria-label="Cloudflare whiteboard resources">
+				<a href="https://developers.cloudflare.com/durable-objects/?utm_source=gryczka.dev&amp;utm_medium=referral&amp;utm_campaign=app-garden&amp;utm_content=demo-resource&amp;utm_term=durable-objects">Durable Objects documentation</a> ·
+				<a href="https://developers.cloudflare.com/durable-objects/best-practices/websockets/?utm_source=gryczka.dev&amp;utm_medium=referral&amp;utm_campaign=app-garden&amp;utm_content=demo-resource&amp;utm_term=durable-objects">WebSocket hibernation</a> ·
+				<a href="https://dash.cloudflare.com/?to=/:account/workers-and-pages&amp;utm_source=gryczka.dev&amp;utm_medium=referral&amp;utm_campaign=app-garden&amp;utm_content=demo-resource&amp;utm_term=workers">Workers dashboard</a>
+			</nav>
+		</section>
 		<script type="module" src="/src/client/main.tsx"></script>
 	</body>
 </html>

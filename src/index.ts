@@ -1,8 +1,11 @@
 /** Worker entrypoint for board creation, WebSocket routing, and static assets. */
 import { hashToken, randomToken } from './shared/crypto';
 import { BoardDurableObject } from './server/board-do';
+import { BoardDirectory } from './server/board-directory';
+import { upgradeToken } from './shared/upgrade-token';
 
-export { BoardDurableObject };
+export { BoardDurableObject, BoardDirectory };
+type Bindings = Omit<Env, 'LEGACY_BOARD_OBJECT_IDS'> & { LEGACY_BOARD_OBJECT_IDS: string };
 
 function json(data: unknown, init?: ResponseInit): Response {
 	return Response.json(data, {
@@ -25,7 +28,7 @@ function withSecurityHeaders(response: Response): Response {
 }
 
 export default {
-	async fetch(request: Request, env: Env): Promise<Response> {
+	async fetch(request: Request, env: Bindings): Promise<Response> {
 		const url = new URL(request.url);
 
 		try {
@@ -37,12 +40,15 @@ export default {
 				const boardId = randomToken(16);
 				const editToken = randomToken(24);
 				const viewToken = randomToken(24);
+				const [editHash, viewHash] = await Promise.all([hashToken(editToken), hashToken(viewToken)]);
+				const ttl = Number.parseInt(env.BOARD_TTL_DAYS, 10);
+				const days = Number.isFinite(ttl) ? Math.max(1, Math.min(ttl, 90)) : 30;
+				const expiresAt = Date.now() + days * 86_400_000;
+				if (!(await env.BOARD_DIRECTORY.getByName('global').reserve(boardId, editHash, viewHash, expiresAt))) {
+					return json({ error: 'Board admission allowance exhausted.' }, { status: 429 });
+				}
 				const board = env.BOARDS.getByName(boardId);
-				const result = await board.initialize(
-					await hashToken(editToken),
-					await hashToken(viewToken),
-					Number.parseInt(env.BOARD_TTL_DAYS, 10),
-				);
+				const result = await board.initialize(editHash, viewHash, days, expiresAt);
 
 				console.log(JSON.stringify({ event: 'board_created', board: boardId.slice(0, 8) }));
 				return json({ boardId, editToken, viewToken, expiresAt: result.expiresAt }, { status: 201 });
@@ -53,11 +59,26 @@ export default {
 				if (request.headers.get('Upgrade') !== 'websocket') {
 					return json({ error: 'Expected a WebSocket upgrade.' }, { status: 426 });
 				}
-				return env.BOARDS.getByName(websocketMatch[1]).fetch(request);
+				const token = upgradeToken(request);
+				if (!token) return json({ error: 'Capability required.' }, { status: 403 });
+				const boardId = websocketMatch[1];
+				const authorized = await env.BOARD_DIRECTORY.getByName('global').authorize(boardId, await hashToken(token));
+				if (!authorized) {
+					const ids: unknown = JSON.parse(env.LEGACY_BOARD_OBJECT_IDS);
+					if (!Array.isArray(ids) || ids.length > 50 || ids.some((id) => typeof id !== 'string' || !/^[a-f0-9]{64}$/.test(id))) {
+						throw new Error('Invalid legacy board manifest');
+					}
+					// Hashing a name is local; only inventory-verified legacy actors may be dispatched.
+					if (!ids.includes(env.BOARDS.idFromName(boardId).toString()))
+						return json({ error: 'Board not found or capability invalid.' }, { status: 404 });
+				}
+				return env.BOARDS.getByName(boardId).fetch(request);
 			}
 
 			if (url.pathname.startsWith('/api/')) return json({ error: 'Not found' }, { status: 404 });
-			return withSecurityHeaders(await env.ASSETS.fetch(request));
+			const response = withSecurityHeaders(await env.ASSETS.fetch(request));
+			if (url.pathname.startsWith('/board/')) response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+			return response;
 		} catch (error) {
 			console.error(
 				JSON.stringify({ event: 'request_failed', path: url.pathname, error: error instanceof Error ? error.message : String(error) }),

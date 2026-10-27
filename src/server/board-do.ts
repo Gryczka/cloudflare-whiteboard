@@ -1,6 +1,7 @@
 /** Authoritative per-board coordinator backed by embedded SQLite. */
 import { DurableObject } from 'cloudflare:workers';
 import { hashToken, safeEqual } from '../shared/crypto';
+import { upgradeToken } from '../shared/upgrade-token';
 import { type BoardElement, type BoardMetadata, type BoardOperation } from '../shared/board';
 import {
 	CHAT_HISTORY_LIMIT,
@@ -22,6 +23,7 @@ interface ConnectionAttachment {
 	displayName?: string;
 	color?: string;
 	capability?: 'edit' | 'view';
+	upgradeHash?: string;
 	x?: number;
 	y?: number;
 	selectedIds?: string[];
@@ -44,6 +46,8 @@ type ChatRow = Record<string, SqlStorageValue> & {
 
 const AUTH_TIMEOUT_MS = 5_000;
 const DAY_MS = 86_400_000;
+const MAX_ELEMENT_BYTES = 8 * 1024 * 1024;
+const MAX_OPERATION_BYTES = 4 * 1024 * 1024;
 
 function boundedTtlDays(value: number): number {
 	return Number.isFinite(value) ? Math.max(1, Math.min(Math.trunc(value), 90)) : 30;
@@ -56,13 +60,13 @@ export class BoardDurableObject extends DurableObject<Env> {
 		this.ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair('ping', 'pong'));
 	}
 
-	async initialize(editHash: string, viewHash: string, ttlDays: number): Promise<{ expiresAt: number }> {
+	async initialize(editHash: string, viewHash: string, ttlDays: number, admittedExpiresAt?: number): Promise<{ expiresAt: number }> {
 		this.ensureSchema();
 		const existing = this.getMeta('created_at');
 		if (existing) return { expiresAt: Number(this.getMeta('expires_at')) };
 
 		const now = Date.now();
-		const expiresAt = now + boundedTtlDays(ttlDays) * DAY_MS;
+		const expiresAt = Math.min(admittedExpiresAt ?? Infinity, now + boundedTtlDays(ttlDays) * DAY_MS);
 		this.ctx.storage.transactionSync(() => {
 			this.setMeta('edit_hash', editHash);
 			this.setMeta('view_hash', viewHash);
@@ -72,7 +76,7 @@ export class BoardDurableObject extends DurableObject<Env> {
 			this.setMeta('updated_at', String(now));
 			this.setMeta('expires_at', String(expiresAt));
 		});
-		await this.ctx.storage.setAlarm(expiresAt);
+		await this.scheduleNextAlarm();
 		return { expiresAt };
 	}
 
@@ -115,21 +119,51 @@ export class BoardDurableObject extends DurableObject<Env> {
 	}
 
 	async fetch(request: Request): Promise<Response> {
-		if (!this.hasSchema() || !this.getMeta('created_at')) return new Response('Board expired or not found', { status: 410 });
+		if (!this.isLive()) return new Response('Board expired or not found', { status: 410 });
+		const token = upgradeToken(request);
+		if (!token) return new Response('Capability required', { status: 403 });
+		const hash = await hashToken(token);
+		if (!this.isLive()) return new Response('Board expired', { status: 410 });
+		const capability = safeEqual(hash, this.getMeta('edit_hash') ?? '')
+			? 'edit'
+			: safeEqual(hash, this.getMeta('view_hash') ?? '')
+				? 'view'
+				: null;
+		if (!capability) return new Response('Invalid capability', { status: 403 });
 		// Idempotent: brings boards created before a table was introduced up to the current schema.
 		this.ensureSchema();
+		this.ctx.storage.sql.exec('DELETE FROM elements WHERE deleted = 1');
 		if (request.headers.get('Upgrade') !== 'websocket') return new Response('Expected WebSocket', { status: 426 });
 		if (this.ctx.getWebSockets().length >= MAX_CONNECTIONS) return new Response('Board is at capacity', { status: 429 });
+		if (!this.isLive()) return new Response('Board expired', { status: 410 });
 
 		const pair = new WebSocketPair();
 		const [client, server] = Object.values(pair);
 		this.ctx.acceptWebSocket(server);
-		server.serializeAttachment({ authenticated: false, connectedAt: Date.now() } satisfies ConnectionAttachment);
+		server.serializeAttachment({
+			authenticated: false,
+			connectedAt: Date.now(),
+			capability,
+			upgradeHash: hash,
+		} satisfies ConnectionAttachment);
 		await this.scheduleNextAlarm();
-		return new Response(null, { status: 101, webSocket: client });
+		if (this.rejectExpired(server)) return new Response('Board expired', { status: 410 });
+		return new Response(null, { status: 101, webSocket: client, headers: { 'Sec-WebSocket-Protocol': 'whiteboard' } });
+	}
+
+	private isLive(): boolean {
+		return this.hasSchema() && Boolean(this.getMeta('created_at')) && Number(this.getMeta('expires_at') ?? 0) > Date.now();
+	}
+
+	private rejectExpired(socket: WebSocket): boolean {
+		if (this.isLive()) return false;
+		this.send(socket, { type: 'board-expired' });
+		socket.close(1001, 'Board expired');
+		return true;
 	}
 
 	async webSocketMessage(webSocket: WebSocket, raw: string | ArrayBuffer): Promise<void> {
+		if (this.rejectExpired(webSocket)) return;
 		if (typeof raw !== 'string' || new TextEncoder().encode(raw).byteLength > MAX_MESSAGE_BYTES) {
 			this.send(webSocket, { type: 'error', reason: 'Message is too large or not valid text.' });
 			webSocket.close(1009, 'Invalid message');
@@ -195,6 +229,7 @@ export class BoardDurableObject extends DurableObject<Env> {
 
 	/** Persists a chat message before relaying it, then prunes older history. */
 	private appendChat(attachment: ConnectionAttachment, body: string): void {
+		if (!this.isLive()) return;
 		const message: ChatMessage = {
 			id: crypto.randomUUID(),
 			participantId: attachment.participantId ?? '',
@@ -236,11 +271,13 @@ export class BoardDurableObject extends DurableObject<Env> {
 		const attachment = webSocket.deserializeAttachment() as ConnectionAttachment | null;
 		if (attachment?.participantId) this.broadcast({ type: 'participant-left', participantId: attachment.participantId }, webSocket);
 		webSocket.close(code, reason);
+		await this.scheduleNextAlarm();
 	}
 
-	webSocketError(webSocket: WebSocket): void {
+	async webSocketError(webSocket: WebSocket): Promise<void> {
 		const attachment = webSocket.deserializeAttachment() as ConnectionAttachment | null;
 		if (attachment?.participantId) this.broadcast({ type: 'participant-left', participantId: attachment.participantId }, webSocket);
+		await this.scheduleNextAlarm();
 	}
 
 	async alarm(): Promise<void> {
@@ -268,7 +305,18 @@ export class BoardDurableObject extends DurableObject<Env> {
 		webSocket: WebSocket,
 		message: Extract<ReturnType<typeof clientMessageSchema.parse>, { type: 'hello' }>,
 	): Promise<void> {
+		const pending = webSocket.deserializeAttachment() as ConnectionAttachment | null;
+		if (!pending?.connectedAt || pending.connectedAt + AUTH_TIMEOUT_MS <= Date.now()) {
+			webSocket.close(1008, 'Authentication timed out');
+			await this.scheduleNextAlarm();
+			return;
+		}
 		const suppliedHash = await hashToken(message.token);
+		if (this.rejectExpired(webSocket)) return;
+		if (!pending.upgradeHash || !safeEqual(pending.upgradeHash, suppliedHash) || pending.connectedAt + AUTH_TIMEOUT_MS <= Date.now()) {
+			webSocket.close(1008, 'Invalid or late capability');
+			return;
+		}
 		const editHash = this.getMeta('edit_hash') ?? '';
 		const viewHash = this.getMeta('view_hash') ?? '';
 		const capability: 'edit' | 'view' | null = safeEqual(suppliedHash, editHash)
@@ -297,6 +345,8 @@ export class BoardDurableObject extends DurableObject<Env> {
 			rateCount: 0,
 		};
 		webSocket.serializeAttachment(attachment);
+		await this.scheduleNextAlarm();
+		if (this.rejectExpired(webSocket)) return;
 
 		const serverSeq = Number(this.getMeta('server_seq') ?? 0);
 		const oldest =
@@ -340,6 +390,7 @@ export class BoardDurableObject extends DurableObject<Env> {
 	}
 
 	private async applyAndBroadcast(source: WebSocket, opId: string, operation: BoardOperation, participantId: string): Promise<void> {
+		if (this.rejectExpired(source)) return;
 		const duplicate = this.ctx.storage.sql
 			.exec<OperationRow>('SELECT server_seq, payload FROM operations WHERE op_id = ?', opId)
 			.toArray()[0];
@@ -367,43 +418,60 @@ export class BoardDurableObject extends DurableObject<Env> {
 
 		const nextSeq = Number(this.getMeta('server_seq') ?? 0) + 1;
 		const now = Date.now();
-		const expiresAt = now + boundedTtlDays(Number.parseInt(this.env.BOARD_TTL_DAYS, 10)) * DAY_MS;
-		this.ctx.storage.transactionSync(() => {
-			if (operation.action === 'put') {
-				const element = operation.element;
-				this.ctx.storage.sql.exec(
-					`INSERT INTO elements (element_id, element_type, data, z_index, updated_seq, deleted)
+		try {
+			this.ctx.storage.transactionSync(() => {
+				if (operation.action === 'put') {
+					const element = operation.element;
+					this.ctx.storage.sql.exec(
+						`INSERT INTO elements (element_id, element_type, data, z_index, updated_seq, deleted)
            VALUES (?, ?, ?, ?, ?, 0)
            ON CONFLICT(element_id) DO UPDATE SET element_type=excluded.element_type, data=excluded.data,
              z_index=excluded.z_index, updated_seq=excluded.updated_seq, deleted=0`,
-					element.id,
-					element.type,
-					JSON.stringify(element),
-					element.zIndex,
+						element.id,
+						element.type,
+						JSON.stringify(element),
+						element.zIndex,
+						nextSeq,
+					);
+				} else if (operation.action === 'delete') {
+					this.ctx.storage.sql.exec('DELETE FROM elements WHERE element_id = ?', operation.elementId);
+				} else if (operation.action === 'clear') {
+					this.ctx.storage.sql.exec('DELETE FROM elements');
+				} else if (operation.action === 'title') {
+					this.setMeta('title', operation.title);
+				}
+				this.ctx.storage.sql.exec(
+					'INSERT INTO operations (server_seq, op_id, participant_id, operation_type, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)',
 					nextSeq,
+					opId,
+					participantId,
+					operation.action,
+					JSON.stringify(operation),
+					now,
 				);
-			} else if (operation.action === 'delete') {
-				this.ctx.storage.sql.exec('UPDATE elements SET deleted = 1, updated_seq = ? WHERE element_id = ?', nextSeq, operation.elementId);
-			} else if (operation.action === 'clear') {
-				this.ctx.storage.sql.exec('UPDATE elements SET deleted = 1, updated_seq = ? WHERE deleted = 0', nextSeq);
-			} else if (operation.action === 'title') {
-				this.setMeta('title', operation.title);
-			}
-			this.ctx.storage.sql.exec(
-				'INSERT INTO operations (server_seq, op_id, participant_id, operation_type, payload, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-				nextSeq,
-				opId,
-				participantId,
-				operation.action,
-				JSON.stringify(operation),
-				now,
-			);
-			this.setMeta('server_seq', String(nextSeq));
-			this.setMeta('updated_at', String(now));
-			this.setMeta('expires_at', String(expiresAt));
-			this.ctx.storage.sql.exec('DELETE FROM operations WHERE server_seq <= ?', Math.max(0, nextSeq - OPLOG_LIMIT));
-		});
-		await this.ctx.storage.setAlarm(expiresAt);
+				this.setMeta('server_seq', String(nextSeq));
+				this.setMeta('updated_at', String(now));
+				this.ctx.storage.sql.exec('DELETE FROM operations WHERE server_seq <= ?', Math.max(0, nextSeq - OPLOG_LIMIT));
+				if (
+					this.ctx.storage.sql.exec<{ bytes: number }>('SELECT COALESCE(SUM(LENGTH(CAST(data AS BLOB))), 0) AS bytes FROM elements').one()
+						.bytes > MAX_ELEMENT_BYTES
+				) {
+					throw new Error('Board retained element byte allowance exhausted');
+				}
+				// Keep a contiguous suffix: resume before its oldest sequence falls back to a snapshot.
+				this.ctx.storage.sql.exec(
+					`DELETE FROM operations WHERE server_seq IN (
+				SELECT server_seq FROM (SELECT server_seq, SUM(LENGTH(CAST(payload AS BLOB))) OVER (ORDER BY server_seq DESC) AS bytes FROM operations) WHERE bytes > ?
+			)`,
+					MAX_OPERATION_BYTES,
+				);
+			});
+		} catch (error) {
+			if (!(error instanceof Error) || error.message !== 'Board retained element byte allowance exhausted') throw error;
+			this.send(source, { type: 'operation-rejected', opId, reason: error.message });
+			return;
+		}
+		await this.scheduleNextAlarm();
 		this.broadcast({ type: 'operation-applied', opId, serverSeq: nextSeq, operation });
 	}
 
@@ -442,16 +510,21 @@ export class BoardDurableObject extends DurableObject<Env> {
 		const windowStart = attachment.rateWindow ?? now;
 		const reset = now - windowStart >= 1_000;
 		const rateCount = reset ? 1 : (attachment.rateCount ?? 0) + 1;
-		webSocket.serializeAttachment({ ...attachment, rateWindow: reset ? now : windowStart, rateCount });
+		// Presence merges this same attachment later. Keep its counters current too.
+		attachment.rateWindow = reset ? now : windowStart;
+		attachment.rateCount = rateCount;
+		webSocket.serializeAttachment(attachment);
 		if (rateCount <= 40) return true;
 		this.send(webSocket, { type: 'error', reason: 'Message rate exceeded.' });
 		return false;
 	}
 
 	private async scheduleNextAlarm(): Promise<void> {
+		if (!this.hasSchema()) return;
 		const expiresAt = Number(this.getMeta('expires_at') ?? 0);
 		const authDeadlines = this.ctx
 			.getWebSockets()
+			.filter((socket) => socket.readyState === WebSocket.OPEN)
 			.map((socket) => socket.deserializeAttachment() as ConnectionAttachment | null)
 			.filter((attachment) => attachment && !attachment.authenticated && attachment.connectedAt)
 			.map((attachment) => attachment!.connectedAt! + AUTH_TIMEOUT_MS);
@@ -477,7 +550,8 @@ export class BoardDurableObject extends DurableObject<Env> {
 	private broadcast(message: ServerMessage, exclude?: WebSocket): void {
 		const encoded = JSON.stringify(message);
 		for (const socket of this.ctx.getWebSockets()) {
-			if (socket !== exclude && socket.readyState === WebSocket.OPEN) socket.send(encoded);
+			const attachment = socket.deserializeAttachment() as ConnectionAttachment | null;
+			if (socket !== exclude && socket.readyState === WebSocket.OPEN && attachment?.authenticated) socket.send(encoded);
 		}
 	}
 }

@@ -42,7 +42,7 @@ export function useBoard(boardId: string, token: string) {
 			if (cancelled) return;
 			setStatus(reconnectRef.current ? 'reconnecting' : 'connecting');
 			const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-			const socket = new WebSocket(`${protocol}//${window.location.host}/api/boards/${boardId}/ws`);
+			const socket = new WebSocket(`${protocol}//${window.location.host}/api/boards/${boardId}/ws`, ['whiteboard', `cap.${token}`]);
 			socketRef.current = socket;
 
 			socket.addEventListener('open', () => {
@@ -80,7 +80,7 @@ export function useBoard(boardId: string, token: string) {
 						const title = message.operation.title;
 						setMetadata((current) => (current ? { ...current, title, updatedAt: Date.now() } : current));
 					} else {
-						setMetadata((current) => (current ? { ...current, updatedAt: Date.now(), expiresAt: Date.now() + 30 * 86_400_000 } : current));
+						setMetadata((current) => (current ? { ...current, updatedAt: Date.now() } : current));
 					}
 				} else if (message.type === 'operation-rejected') {
 					// Reconnect to discard optimistic state and load the canonical board.
@@ -103,7 +103,7 @@ export function useBoard(boardId: string, token: string) {
 			});
 			socket.addEventListener('close', (event) => {
 				if (cancelled) return;
-				if (event.code === 1008 || event.code === 1000) {
+				if (event.code === 1008 || event.code === 1000 || event.code === 1001) {
 					setStatus('invalid');
 					return;
 				}

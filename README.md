@@ -1,6 +1,9 @@
 # Cloudflare Whiteboard
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/Gryczka/cloudflare-whiteboard)
+
+See [guardrail fixes, discovery policy and deployment readiness](docs/app-garden-guardrails.md).
+
 [![Cloudflare Workers](https://img.shields.io/badge/Cloudflare-Workers-F38020?logo=cloudflare&logoColor=white)](https://developers.cloudflare.com/workers/)
 [![Durable Objects](https://img.shields.io/badge/Durable_Objects-SQLite-0A95FF)](https://developers.cloudflare.com/durable-objects/)
 [![React](https://img.shields.io/badge/React-19-149ECA?logo=react)](https://react.dev/)
@@ -34,7 +37,7 @@ The editor itself is built with React and SVG. It includes drawing, shapes, text
 - Per-board chat with server-ordered history that survives reload and reconnect; view-only links can read but not post
 - Per-user undo and redo
 - PNG, standalone SVG, and versioned JSON export; validated JSON import
-- Thirty-day sliding expiration driven by a Durable Object alarm
+- Thirty-day absolute expiration enforced on requests/mutations and cleaned up by a Durable Object alarm
 - Server-side element, message, connection, and operation-rate limits
 - High-contrast light palette using the current Cloudflare Kumo product-page visual language
 
@@ -46,7 +49,9 @@ The editor itself is built with React and SVG. It includes drawing, shapes, text
 flowchart LR
     B[React + SVG browsers] -->|Create board and static assets| W[Cloudflare Worker]
     B <-->|Hibernatable WebSocket| W
-    W -->|getByName boardId| D[Board Durable Object]
+    W -->|Reserve or authorize| C[Fixed BoardDirectory]
+    C -->|Bounded admission and capability check| W
+    W -->|Admitted or inventory-verified board only| D[Board Durable Object]
     D --> S[(SQLite materialized state)]
     D --> O[(Bounded operation tail)]
     D --> A[30-day alarm]
@@ -54,9 +59,9 @@ flowchart LR
     D -->|Transient presence| B
 ```
 
-The Worker serves the Vite assets, creates capability tokens, rate-limits board creation, and routes each WebSocket to `env.BOARDS.getByName(boardId)`. The board's Durable Object validates permissions, assigns a monotonic sequence to each mutation, writes canonical state to its embedded SQLite database, and broadcasts only after persistence succeeds.
+The Worker serves the Vite assets, creates capability tokens, and checks a fixed bounded BOARD_DIRECTORY before routing a WebSocket to `env.BOARDS.getByName(boardId)`. Inventory-verified legacy actors retain their existing capabilities. The board validates the upgrade capability before accepting a socket, enforces absolute expiry and bounded retained rows/bytes, writes each canonical mutation atomically, and broadcasts only after persistence succeeds.
 
-Cursor traffic never touches storage. Clients send transient presence at a bounded rate while committed pointer-up changes use the durable operation path.
+Cursor traffic remains transient and is not persisted as board content; authoritative expiry checks read the stored deadline. Clients send presence at a bounded rate while committed pointer-up changes use the durable operation path.
 
 ## Collaboration model
 
@@ -147,7 +152,7 @@ npm run deploy
 
 Wrangler uses the account associated with your current login. The repository intentionally does not commit an account ID or tenant-specific resource IDs.
 
-The deployment creates the SQLite-backed Durable Object namespace from migration `v1`. Never edit an existing migration after deployment; append a new migration tag for future class changes.
+The deployment creates the SQLite-backed Durable Object namespaces from migrations `v1` (boards) and `v2-directory` (the board admission directory). Never edit an existing migration after deployment; append a new migration tag for future class changes. A fresh deployment starts with an empty legacy board inventory; the hosted garden builds with `GARDEN_PRODUCTION_PREFLIGHT=1`, which selects an untracked owner config containing its account and verified inventory.
 
 ## Configuration
 
@@ -163,7 +168,7 @@ Public-demo limits are defined in `src/shared/protocol.ts` and `wrangler.jsonc`:
 | Retained operations     |               2,000 |
 | Chat message length     |      500 characters |
 | Retained chat messages  |                 200 |
-| Inactivity retention    |             30 days |
+| Absolute lifetime       |             30 days |
 
 ## Project structure
 

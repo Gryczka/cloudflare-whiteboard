@@ -1,9 +1,11 @@
 import { env, exports } from 'cloudflare:workers';
-import { describe, expect, it } from 'vitest';
+import { runInDurableObject } from 'cloudflare:test';
+import { describe, expect, it, vi } from 'vitest';
 import { applyOperation, boardElementSchema, DEFAULT_STYLE, type BoardElement } from '../src/shared/board';
 import { hashToken, randomToken, safeEqual } from '../src/shared/crypto';
 import { chatMessageSchema, type ServerMessage } from '../src/shared/protocol';
 import { centerPlacement, createObjectAt, DEFAULT_SIZES } from '../src/client/editor/shape-defaults';
+import worker from '../src/index';
 import { textBoxHeight, wrapTextLines } from '../src/client/editor/text-layout';
 
 const rectangle: BoardElement = {
@@ -178,8 +180,12 @@ async function waitForMessage<T extends ServerMessage['type']>(inbox: ServerMess
 	throw new Error(`Timed out waiting for a ${type} message`);
 }
 
-async function join(board: Board, token: string) {
-	const response = await board.fetch(new Request('https://example.com/api/boards/board/ws', { headers: { Upgrade: 'websocket' } }));
+async function join(board: Board, token: string, sinceSeq = 0) {
+	const response = await board.fetch(
+		new Request('https://example.com/api/boards/board/ws', {
+			headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': `whiteboard, cap.${token}` },
+		}),
+	);
 	const socket = response.webSocket;
 	if (!socket) throw new Error('The Durable Object did not return a WebSocket');
 	socket.accept();
@@ -194,7 +200,7 @@ async function join(board: Board, token: string) {
 			participantId: crypto.randomUUID(),
 			displayName: 'Tester',
 			color: '#0A95FF',
-			sinceSeq: 0,
+			sinceSeq,
 		}),
 	);
 	const welcome = await waitForMessage(inbox, 'welcome');
@@ -247,5 +253,267 @@ describe('board chat', () => {
 
 		const rejoined = await join(board, EDIT_TOKEN);
 		expect(rejoined.welcome.metadata.expiresAt).toBe(before);
+	});
+});
+
+describe('deployed guardrail regressions', () => {
+	it('preserves inventory-verified legacy capabilities without initializing unknown actors', async () => {
+		const id = randomToken(16);
+		const board = env.BOARDS.getByName(id);
+		await board.initialize(await hashToken(EDIT_TOKEN), await hashToken(VIEW_TOKEN), 30);
+		const legacyEnv = { ...env, LEGACY_BOARD_OBJECT_IDS: JSON.stringify([env.BOARDS.idFromName(id).toString()]) };
+		const url = `https://example.com/api/boards/${id}/ws`;
+		expect(
+			(
+				await worker.fetch(
+					new Request(url, { headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': `whiteboard, cap.${randomToken(24)}` } }),
+					legacyEnv,
+				)
+			).status,
+		).toBe(403);
+		const response = await worker.fetch(
+			new Request(url, { headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': `whiteboard, cap.${VIEW_TOKEN}` } }),
+			legacyEnv,
+		);
+		expect(response.status).toBe(101);
+		response.webSocket!.accept();
+		response.webSocket!.close(1000);
+	});
+	it('rejects arbitrary IDs before actor dispatch and invalid known-board upgrades before accepting slots', async () => {
+		const dispatch = vi.fn(() => {
+			throw new Error('Untrusted actor dispatch');
+		});
+		const boards = new Proxy(env.BOARDS, {
+			get(target, property) {
+				if (property === 'getByName') return dispatch;
+				const value: unknown = Reflect.get(target, property);
+				return typeof value === 'function' ? value.bind(target) : value;
+			},
+		});
+		for (let n = 0; n < 35; n++) {
+			const response = await worker.fetch(
+				new Request(`https://example.com/api/boards/${randomToken(16)}/ws`, {
+					headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': `whiteboard, cap.${randomToken(24)}` },
+				}),
+				{ ...env, BOARDS: boards },
+			);
+			expect(response.status).toBe(404);
+		}
+		expect(dispatch).not.toHaveBeenCalled();
+		const board = await newBoard();
+		for (let n = 0; n < 35; n++)
+			expect(
+				(
+					await board.fetch(
+						new Request('https://example.com/ws', {
+							headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': `whiteboard, cap.${randomToken(24)}` },
+						}),
+					)
+				).status,
+			).toBe(403);
+		await runInDurableObject(board, (_instance, state) => expect(state.getWebSockets()).toHaveLength(0));
+		const valid = await join(board, EDIT_TOKEN);
+		valid.socket.close(1000);
+	});
+
+	it('bounds directory admission before allocating per-board actors', async () => {
+		const directory = env.BOARD_DIRECTORY.getByName(`limit-${crypto.randomUUID()}`);
+		for (let n = 0; n < 20; n++) expect(await directory.reserve(`board-${n}`, 'edit', 'view', Date.now() + 86_400_000)).toBe(true);
+		expect(await directory.reserve('twenty-first', 'edit', 'view', Date.now() + 86_400_000)).toBe(false);
+		expect(await directory.authorize('unknown', 'edit')).toBe(false);
+	});
+
+	it('prunes delete/clear payloads under UUID churn while preserving bounded replay and absolute expiry', async () => {
+		const board = await newBoard();
+		const author = await join(board, EDIT_TOKEN);
+		await runInDurableObject(board, async (instance, state) => {
+			const ws = state.getWebSockets()[0];
+			const expiry = state.storage.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'expires_at'").one().value;
+			for (let n = 0; n < 1100; n++) {
+				const id = crypto.randomUUID();
+				for (const operation of [
+					{ action: 'put', element: { ...rectangle, id } },
+					n % 2 ? { action: 'delete', elementId: id } : { action: 'clear' },
+				]) {
+					ws.serializeAttachment({ ...ws.deserializeAttachment(), rateWindow: 0, rateCount: 0 });
+					await instance.webSocketMessage(ws, JSON.stringify({ type: 'operation', opId: crypto.randomUUID(), operation }));
+				}
+			}
+			expect(state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM elements').one().n).toBe(0);
+			expect(state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM operations').one().n).toBe(2000);
+			expect(state.storage.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'expires_at'").one().value).toBe(expiry);
+		});
+		const resumed = await join(board, EDIT_TOKEN, 1);
+		expect(resumed.welcome.elements).toEqual([]);
+		expect(resumed.welcome.operations).toBeUndefined();
+		resumed.socket.close(1000);
+		author.socket.close(1000);
+	}, 30_000);
+
+	it('rolls back an over-byte-limit put including its operation and sequence', async () => {
+		const board = await newBoard();
+		const author = await join(board, EDIT_TOKEN);
+		await runInDurableObject(board, async (instance, state) => {
+			for (let n = 0; n < 128; n++)
+				state.storage.sql.exec('INSERT INTO elements VALUES (?, ?, ?, 0, 0, 0)', crypto.randomUUID(), 'rectangle', 'x'.repeat(64 * 1024));
+			await instance.webSocketMessage(
+				state.getWebSockets()[0],
+				JSON.stringify({
+					type: 'operation',
+					opId: crypto.randomUUID(),
+					operation: { action: 'put', element: { ...rectangle, id: crypto.randomUUID() } },
+				}),
+			);
+			expect(state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM elements').one().n).toBe(128);
+			expect(state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM operations').one().n).toBe(0);
+		});
+		await waitForMessage(author.inbox, 'operation-rejected');
+		author.socket.close(1000);
+	});
+
+	it('rejects late operations without relying on alarm delivery or renewing expired metadata', async () => {
+		const board = await newBoard();
+		const author = await join(board, EDIT_TOKEN);
+		await runInDurableObject(board, async (instance, state) => {
+			const deadline = Date.now() - 1;
+			state.storage.sql.exec("UPDATE meta SET value = ? WHERE key = 'expires_at'", String(deadline));
+			await instance.webSocketMessage(
+				state.getWebSockets()[0],
+				JSON.stringify({ type: 'operation', opId: crypto.randomUUID(), operation: { action: 'put', element: rectangle } }),
+			);
+			expect(state.storage.sql.exec<{ n: number }>('SELECT COUNT(*) AS n FROM operations').one().n).toBe(0);
+			expect(state.storage.sql.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'expires_at'").one().value).toBe(
+				String(deadline),
+			);
+			expect(
+				(
+					await instance.fetch(
+						new Request('https://example.com/ws', {
+							headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': `whiteboard, cap.${EDIT_TOKEN}` },
+						}),
+					)
+				).status,
+			).toBe(410);
+			await instance.alarm();
+			expect(state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'meta'").toArray()).toEqual([]);
+			expect(await state.storage.getAlarm()).toBeNull();
+		});
+		await waitForMessage(author.inbox, 'board-expired');
+	});
+
+	it('rechecks expiry after asynchronous upgrade and hello hashing', async () => {
+		for (const phase of ['upgrade', 'hello']) {
+			const board = await newBoard();
+			const pending =
+				phase === 'hello'
+					? await board.fetch(
+							new Request('https://example.com/ws', {
+								headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': `whiteboard, cap.${EDIT_TOKEN}` },
+							}),
+						)
+					: null;
+			pending?.webSocket?.accept();
+			await runInDurableObject(board, async (instance, state) => {
+				const base = Date.now();
+				state.storage.sql.exec("UPDATE meta SET value = ? WHERE key = 'expires_at'", String(base + 100));
+				let now = base;
+				const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+				const original = crypto.subtle.digest.bind(crypto.subtle);
+				const digest = vi.spyOn(crypto.subtle, 'digest').mockImplementation(async (algorithm, data) => {
+					const result = await original(algorithm, data);
+					now = base + 200;
+					return result;
+				});
+				try {
+					if (phase === 'upgrade')
+						expect(
+							(
+								await instance.fetch(
+									new Request('https://example.com/ws', {
+										headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': `whiteboard, cap.${EDIT_TOKEN}` },
+									}),
+								)
+							).status,
+						).toBe(410);
+					else {
+						const ws = state.getWebSockets()[0];
+						await instance.webSocketMessage(
+							ws,
+							JSON.stringify({
+								type: 'hello',
+								token: EDIT_TOKEN,
+								participantId: crypto.randomUUID(),
+								displayName: 'Tester',
+								color: '#0A95FF',
+								sinceSeq: 0,
+							}),
+						);
+						expect(ws.deserializeAttachment().authenticated).toBe(false);
+						expect(ws.readyState).not.toBe(WebSocket.OPEN);
+					}
+				} finally {
+					digest.mockRestore();
+					clock.mockRestore();
+				}
+			});
+		}
+	});
+	it('never relays private board broadcasts to pending-authentication sockets', async () => {
+		const board = await newBoard();
+		const author = await join(board, EDIT_TOKEN);
+		const pending = await board.fetch(
+			new Request('https://example.com/api/boards/board/ws', {
+				headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': `whiteboard, cap.${VIEW_TOKEN}` },
+			}),
+		);
+		const socket = pending.webSocket!;
+		socket.accept();
+		const inbox: string[] = [];
+		socket.addEventListener('message', (event) => inbox.push(String(event.data)));
+		author.socket.send(JSON.stringify({ type: 'chat', body: 'Authenticated participants only' }));
+		await waitForMessage(author.inbox, 'chat');
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		expect(inbox).toEqual([]);
+		socket.close(1000, 'test complete');
+		author.socket.close(1000, 'test complete');
+	});
+
+	it('counts successive presence frames instead of restoring stale rate counters', async () => {
+		const board = await newBoard();
+		const author = await join(board, EDIT_TOKEN);
+		await runInDurableObject(board, async (instance, state) => {
+			const socket = state.getWebSockets()[0];
+			for (let index = 0; index < 41; index++) {
+				await instance.webSocketMessage(socket, JSON.stringify({ type: 'presence', x: index, y: 0, selectedIds: [], tool: 'select' }));
+			}
+			expect(socket.deserializeAttachment().rateCount).toBe(41);
+		});
+		const error = await waitForMessage(author.inbox, 'error');
+		expect(error.reason).toBe('Message rate exceeded.');
+		author.socket.close(1000, 'test complete');
+	});
+
+	it('keeps the pending auth deadline and absolute retention during an operation', async () => {
+		const board = await newBoard();
+		const author = await join(board, EDIT_TOKEN);
+		const pending = await board.fetch(
+			new Request('https://example.com/api/boards/board/ws', {
+				headers: { Upgrade: 'websocket', 'Sec-WebSocket-Protocol': `whiteboard, cap.${VIEW_TOKEN}` },
+			}),
+		);
+		pending.webSocket!.accept();
+		author.socket.send(
+			JSON.stringify({ type: 'operation', opId: crypto.randomUUID(), operation: { action: 'title', title: 'A new title' } }),
+		);
+		await waitForMessage(author.inbox, 'operation-applied');
+		await runInDurableObject(board, async (_instance, state) => {
+			const attachment = state
+				.getWebSockets()
+				.map((socket) => socket.deserializeAttachment())
+				.find((value) => !value.authenticated);
+			expect(await state.storage.getAlarm()).toBe(attachment.connectedAt + 5_000);
+		});
+		pending.webSocket!.close(1000, 'test complete');
+		author.socket.close(1000, 'test complete');
 	});
 });

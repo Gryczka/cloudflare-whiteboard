@@ -1,5 +1,7 @@
 User-agent: *
+Content-Signal: search=yes,ai-input=yes,ai-train=no
 Allow: /
 
 Disallow: /api/
 Disallow: /board/
+Sitemap: https://cloudflare-whiteboard.dwarven.workers.dev/sitemap.xml

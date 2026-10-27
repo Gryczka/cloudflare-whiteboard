@@ -13,18 +13,18 @@ Browsers are untrusted. All geometry, text, permissions, message sizes, and rate
 
 ## Primary threats
 
-| Threat                  | Mitigation                                                                                                                         |
-| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| Board enumeration       | Random 128-bit board IDs plus independent 192-bit capabilities                                                                     |
-| Token leakage           | URL fragments, no-referrer policy, no token logging, TLS WebSockets                                                                |
-| Viewer mutation         | Server-side capability check on every operation                                                                                    |
-| Replay                  | Idempotent operation UUIDs                                                                                                         |
-| Stored XSS              | Structured element schema, React text nodes, no raw HTML or foreign SVG, CSP                                                       |
-| Chat abuse              | Edit-only posting, 500-character bodies, per-connection message rate limit, 200-message retention, server-assigned author identity |
-| Resource exhaustion     | Creation, connection, message, operation, element, and point limits; five-second authentication deadline                           |
-| Broadcast amplification | Per-connection message rate limit and bounded room size                                                                            |
-| Infinite retention      | Edit-only 30-day sliding TTL and alarm-driven deletion                                                                             |
-| Sensitive data in logs  | Event metadata only; no operations, text, or full identifiers                                                                      |
+| Threat                  | Mitigation                                                                                                                                                                                          |
+| ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Board enumeration       | Random 128-bit board IDs plus independent 192-bit capabilities                                                                                                                                      |
+| Token leakage           | URL fragments, no-referrer policy, no token logging, TLS WebSockets                                                                                                                                 |
+| Viewer mutation         | Server-side capability check on every operation                                                                                                                                                     |
+| Replay                  | Idempotent operation UUIDs                                                                                                                                                                          |
+| Stored XSS              | Structured element schema, React text nodes, no raw HTML or foreign SVG, CSP                                                                                                                        |
+| Chat abuse              | Edit-only posting, 500-character bodies, per-connection message rate limit, 200-message retention, server-assigned author identity                                                                  |
+| Resource exhaustion     | Fixed directory admits 20 new boards/hour and 50 retained boards; unknown IDs do not dispatch, invalid capabilities cannot reserve socket slots; retained rows/bytes and five-second hello deadline |
+| Broadcast amplification | Per-connection message rate limit and bounded room size                                                                                                                                             |
+| Infinite retention      | Fixed 30-day lifetime (configuration bounded to 90 days), authoritative expiry checks including after crypto, and alarm-driven full deletion                                                        |
+| Sensitive data in logs  | Event metadata only; no operations, text, or full identifiers                                                                                                                                       |
 
 ## Accepted risks
 

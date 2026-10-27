@@ -130,7 +130,7 @@ export function LandingPage() {
 							['Create a board', 'The Worker mints cryptographically random edit and view capabilities.'],
 							['Share a link', 'Collaborators connect to the same board-specific Durable Object.'],
 							['Make your mark', 'Committed changes are ordered, persisted to SQLite, then broadcast.'],
-							['Export or return', 'Download PNG, SVG, or JSON before the 30-day inactivity window closes.'],
+							['Export or return', 'Download PNG, SVG, or JSON before the board’s 30-day lifetime ends.'],
 						].map(([title, copy], index) => (
 							<div className="step" key={title}>
 								<div className="step-rail">
@@ -215,7 +215,9 @@ export function LandingPage() {
 				<Logo />
 				<p>An unofficial reference project built for the gryczka.dev Unrefined App Garden.</p>
 				<div>
-					<a href="https://developers.cloudflare.com/durable-objects/">Durable Objects docs</a>
+					<a href="https://developers.cloudflare.com/durable-objects/?utm_source=gryczka.dev&utm_medium=referral&utm_campaign=app-garden&utm_content=demo-resource&utm_term=durable-objects">
+						Durable Objects docs
+					</a>
 					<a href={REPO_URL}>Source</a>
 				</div>
 			</footer>

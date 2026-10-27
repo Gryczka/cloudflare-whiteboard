@@ -1047,8 +1047,8 @@ export function WhiteboardPage({ boardId, token }: { boardId: string; token: str
 							</button>
 						</div>
 						<div className="expiry-note">
-							Edits keep this board available until{' '}
-							<strong>{board.metadata ? new Date(board.metadata.expiresAt).toLocaleDateString() : '30 days from now'}</strong>.
+							This board expires on{' '}
+							<strong>{board.metadata ? new Date(board.metadata.expiresAt).toLocaleDateString() : 'its fixed deadline'}</strong>.
 						</div>
 					</aside>
 				)}

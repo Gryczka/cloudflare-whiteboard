@@ -11,12 +11,18 @@
 	"assets": {
 		"binding": "ASSETS",
 		"not_found_handling": "single-page-application",
-		"run_worker_first": ["/api/*"],
+		"run_worker_first": ["/api/*", "/board/*"],
 	},
 	"durable_objects": {
-		"bindings": [{ "name": "BOARDS", "class_name": "BoardDurableObject" }],
+		"bindings": [
+			{ "name": "BOARDS", "class_name": "BoardDurableObject" },
+			{ "name": "BOARD_DIRECTORY", "class_name": "BoardDirectory" },
+		],
 	},
-	"migrations": [{ "tag": "v1", "new_sqlite_classes": ["BoardDurableObject"] }],
+	"migrations": [
+		{ "tag": "v1", "new_sqlite_classes": ["BoardDurableObject"] },
+		{ "tag": "v2-directory", "new_sqlite_classes": ["BoardDirectory"] },
+	],
 	"ratelimits": [
 		{
 			"name": "BOARD_CREATION_LIMIT",
@@ -24,7 +30,13 @@
 			"simple": { "limit": 5, "period": 60 },
 		},
 	],
-	"vars": { "BOARD_TTL_DAYS": "30" },
+	// Legacy inventories admit pre-directory boards. A fresh deployment has none;
+	// the hosted garden supplies its verified inventory from an untracked
+	// wrangler.production-preflight.jsonc (GARDEN_PRODUCTION_PREFLIGHT=1).
+	"vars": {
+		"BOARD_TTL_DAYS": "30",
+		"LEGACY_BOARD_OBJECT_IDS": "[]",
+	},
 	"observability": {
 		"enabled": true,
 		"logs": { "head_sampling_rate": 1 },
